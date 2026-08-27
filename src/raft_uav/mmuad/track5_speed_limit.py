@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ SPEED_LIMIT_VALIDATION_JSON = "mmuad_track5_speed_limit_validation.json"
 SPEED_LIMIT_VALIDATION_ROWS_CSV = "mmuad_track5_speed_limit_validation_rows.csv"
 
 _NORMALIZED_SEQUENCE_ID_COLUMNS = ("sequence_id", "Sequence", "sequence", "seq")
+_FLOAT_MAX = np.finfo(float).max
 
 
 def project_track5_speed_limit(
@@ -203,6 +205,89 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _positive_product_ratio(
+    numerator_a: float,
+    numerator_b: float,
+    denominator_a: float,
+    denominator_b: float = 1.0,
+) -> float:
+    """Return ``(a * b) / (c * d)`` without overflowing intermediate products."""
+
+    numerator_a_mantissa, numerator_a_exponent = math.frexp(float(numerator_a))
+    numerator_b_mantissa, numerator_b_exponent = math.frexp(float(numerator_b))
+    denominator_a_mantissa, denominator_a_exponent = math.frexp(float(denominator_a))
+    denominator_b_mantissa, denominator_b_exponent = math.frexp(float(denominator_b))
+    mantissa = (numerator_a_mantissa * numerator_b_mantissa) / (
+        denominator_a_mantissa * denominator_b_mantissa
+    )
+    exponent = (
+        numerator_a_exponent
+        + numerator_b_exponent
+        - denominator_a_exponent
+        - denominator_b_exponent
+    )
+    try:
+        return math.ldexp(mantissa, exponent)
+    except OverflowError:
+        return math.inf
+
+
+def _scaled_displacement(point: np.ndarray, anchor: np.ndarray) -> tuple[float, float]:
+    """Return a shared coordinate scale and the displacement norm in that scale."""
+
+    point_array = np.asarray(point, dtype=float)
+    anchor_array = np.asarray(anchor, dtype=float)
+    scale = float(max(np.max(np.abs(point_array)), np.max(np.abs(anchor_array))))
+    if scale <= 0.0:
+        return 0.0, 0.0
+    scaled_delta = point_array / scale - anchor_array / scale
+    return scale, float(np.hypot.reduce(scaled_delta))
+
+
+def _stable_distance(point: np.ndarray, anchor: np.ndarray) -> float:
+    """Return a finite Euclidean distance for finite coordinate vectors."""
+
+    point_array = np.asarray(point, dtype=float)
+    anchor_array = np.asarray(anchor, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        distance = float(np.linalg.norm(point_array - anchor_array))
+    if np.isfinite(distance):
+        return distance
+    scale, scaled_distance = _scaled_displacement(point_array, anchor_array)
+    if scale <= 0.0 or scaled_distance <= 0.0:
+        return 0.0
+    repaired = _positive_product_ratio(scale, scaled_distance, 1.0)
+    return min(repaired, _FLOAT_MAX)
+
+
+def _stable_row_distances(points: np.ndarray, anchors: np.ndarray) -> np.ndarray:
+    """Preserve ordinary row norms and repair only non-finite reductions."""
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        distances = np.linalg.norm(points - anchors, axis=1)
+    distances = np.asarray(distances, dtype=float)
+    invalid = ~np.isfinite(distances)
+    for index in np.flatnonzero(invalid):
+        distances[index] = _stable_distance(points[index], anchors[index])
+    return distances
+
+
+def _stable_speed(point: np.ndarray, anchor: np.ndarray, dt_s: float) -> float:
+    """Return a finite displacement rate without overflowing before division."""
+
+    point_array = np.asarray(point, dtype=float)
+    anchor_array = np.asarray(anchor, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        speed = float(np.linalg.norm(point_array - anchor_array) / dt_s)
+    if np.isfinite(speed):
+        return speed
+    scale, scaled_distance = _scaled_displacement(point_array, anchor_array)
+    if scale <= 0.0 or scaled_distance <= 0.0:
+        return 0.0
+    repaired = _positive_product_ratio(scale, scaled_distance, dt_s)
+    return min(repaired, _FLOAT_MAX)
+
+
 def _project_sequence(
     group: pd.DataFrame,
     *,
@@ -229,7 +314,7 @@ def _project_sequence(
     out["state_x_m"] = xyz[:, 0]
     out["state_y_m"] = xyz[:, 1]
     out["state_z_m"] = xyz[:, 2]
-    correction = np.linalg.norm(xyz - original_xyz, axis=1)
+    correction = _stable_row_distances(xyz, original_xyz)
     out["speed_limit_applied"] = correction > 1.0e-9
     out["speed_limit_correction_m"] = correction
     out["speed_limit_max_speed_mps"] = float(max_speed_mps)
@@ -261,15 +346,39 @@ def _backward_speed_pass(xyz: np.ndarray, times: np.ndarray, *, max_speed_mps: f
     return out
 
 
-def _clip_to_speed_ball(point: np.ndarray, anchor: np.ndarray, dt_s: float, max_speed_mps: float) -> np.ndarray:
+def _clip_to_speed_ball(
+    point: np.ndarray,
+    anchor: np.ndarray,
+    dt_s: float,
+    max_speed_mps: float,
+) -> np.ndarray:
     if not np.isfinite(dt_s) or dt_s <= 0.0:
         return point
-    delta = point - anchor
-    distance = float(np.linalg.norm(delta))
-    max_distance = float(max_speed_mps) * float(dt_s)
-    if distance <= max_distance or distance <= 0.0:
+    point_array = np.asarray(point, dtype=float)
+    anchor_array = np.asarray(anchor, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        delta = point_array - anchor_array
+        distance = float(np.linalg.norm(delta))
+        max_distance = float(max_speed_mps) * float(dt_s)
+    if np.isfinite(delta).all() and np.isfinite(distance) and np.isfinite(max_distance):
+        if distance <= max_distance or distance <= 0.0:
+            return point
+        return anchor_array + delta * (max_distance / distance)
+
+    scale, scaled_distance = _scaled_displacement(point_array, anchor_array)
+    if scale <= 0.0 or scaled_distance <= 0.0:
         return point
-    return anchor + delta * (max_distance / distance)
+    max_distance_scaled = _positive_product_ratio(max_speed_mps, dt_s, scale)
+    if scaled_distance <= max_distance_scaled:
+        return point
+    interpolation = _positive_product_ratio(
+        max_speed_mps,
+        dt_s,
+        scale,
+        scaled_distance,
+    )
+    interpolation = min(max(interpolation, 0.0), 1.0)
+    return anchor_array * (1.0 - interpolation) + point_array * interpolation
 
 
 def _sequence_diagnostics(
@@ -282,7 +391,7 @@ def _sequence_diagnostics(
     times = rows["time_s"].to_numpy(float)
     input_speed_prev = _previous_speeds(original_xyz, times)
     output_speed_prev = _previous_speeds(xyz, times)
-    correction = np.linalg.norm(xyz - original_xyz, axis=1)
+    correction = _stable_row_distances(xyz, original_xyz)
     return pd.DataFrame(
         {
             "sequence_id": rows["sequence_id"].astype(str),
@@ -301,7 +410,7 @@ def _previous_speeds(xyz: np.ndarray, times: np.ndarray) -> np.ndarray:
     for index in range(1, len(xyz)):
         dt = times[index] - times[index - 1]
         if np.isfinite(dt) and dt > 0.0:
-            speeds[index] = float(np.linalg.norm(xyz[index] - xyz[index - 1]) / dt)
+            speeds[index] = _stable_speed(xyz[index], xyz[index - 1], dt)
     return speeds
 
 
@@ -373,7 +482,17 @@ def _safe_mean(values: pd.Series) -> float | None:
     finite = finite[np.isfinite(finite.to_numpy(float))]
     if finite.empty:
         return None
-    return float(np.mean(finite.to_numpy(float)))
+    array = finite.to_numpy(float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        mean = float(np.mean(array))
+    if np.isfinite(mean):
+        return mean
+    scale = float(np.max(np.abs(array)))
+    if scale <= 0.0:
+        return 0.0
+    scaled_mean = float(np.mean(array / scale))
+    repaired = _positive_product_ratio(scale, scaled_mean, 1.0)
+    return min(repaired, _FLOAT_MAX)
 
 
 def _safe_max(values: pd.Series) -> float | None:
