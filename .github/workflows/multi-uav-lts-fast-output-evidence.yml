@@ -1,0 +1,276 @@
+---
+name: Multi-UAV LTS fast output sweep
+
+"on":
+  pull_request:
+    branches:
+      - agent/lts-metric-aware-bayesian
+    paths:
+      - ".github/workflows/multi-uav-lts-fast-output-evidence.yml"
+      - "scripts/run_multi_uav_lts_fast_output_evidence.py"
+      - "src/raft_uav/multi_uav_lts/trajectory_box_calibration.py"
+      - "src/raft_uav/multi_uav_lts/trajectory_gap_completion.py"
+  workflow_dispatch:
+    inputs:
+      device:
+        description: CUDA device used only if the proposal source must be regenerated
+        required: true
+        default: "0"
+        type: string
+      expected_sequence_count:
+        description: Required number of official training sequences
+        required: true
+        default: "102"
+        type: string
+      expected_frame_count:
+        description: Required number of official training frames
+        required: true
+        default: "77293"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-fast-output-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
+
+jobs:
+  focused-tests:
+    name: Fast-output focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest -q \
+            tests/test_multi_uav_lts_trajectory_box_calibration.py \
+            tests/test_multi_uav_lts_trajectory_gap_completion.py
+          python -m py_compile scripts/run_multi_uav_lts_fast_output_evidence.py
+          python scripts/run_multi_uav_lts_fast_output_evidence.py --help >/dev/null
+          python -m ruff check \
+            scripts/run_multi_uav_lts_fast_output_evidence.py \
+            src/raft_uav/multi_uav_lts/trajectory_box_calibration.py \
+            src/raft_uav/multi_uav_lts/trajectory_gap_completion.py
+
+  train-evidence:
+    name: Guarded 102-sequence fast output sweep
+    needs: focused-tests
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 240
+
+    env:
+      GPU_DEVICE: ${{ inputs.device || '0' }}
+      EXPECTED_SEQUENCE_COUNT: ${{ inputs.expected_sequence_count || '102' }}
+      EXPECTED_FRAME_COUNT: ${{ inputs.expected_frame_count || '77293' }}
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Select persistent evidence cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
+          best_root=""
+          best_free=0
+          candidates=(
+            "/mnt/corsair/raft-uav-public-evidence"
+            "${HOME}/.cache/raft-uav-public-evidence"
+            "${RUNNER_TEMP}/raft-uav-public-evidence"
+          )
+          for candidate in "${candidates[@]}"; do
+            free_bytes=0
+            if mkdir -p "${candidate}" 2>/dev/null; then
+              probe="${candidate}/.write-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              if printf 'ok\n' > "${probe}" 2>/dev/null; then
+                rm -f "${probe}"
+                free_bytes="$(df -PB1 "${candidate}" | awk 'NR == 2 {print $4}')"
+              fi
+            fi
+            if (( free_bytes > best_free )); then
+              best_root="${candidate}"
+              best_free="${free_bytes}"
+            fi
+          done
+          if [[ -z "${best_root}" ]] || (( best_free < minimum_free_bytes )); then
+            echo "No evidence cache has the required free space." >&2
+            exit 1
+          fi
+
+          work_root="${best_root}/multi-uav-lts-zenodo-15853476"
+          cache_key="${GITHUB_HEAD_SHA:-${GITHUB_SHA}}"
+          run_dir="${work_root}/fast-output-resume/${cache_key}"
+          venv_path="${work_root}/runtime/venvs/proposal-graph-py311-torch222"
+          asset_dir="${work_root}/assets/runtime"
+          inputs_json="${run_dir}/public-inputs.json"
+          mkdir -p "${run_dir}" "${asset_dir}" "$(dirname "${venv_path}")"
+          {
+            printf 'WORK_ROOT=%s\n' "${work_root}"
+            printf 'RUN_DIR=%s\n' "${run_dir}"
+            printf 'VENV_PATH=%s\n' "${venv_path}"
+            printf 'ASSET_DIR=%s\n' "${asset_dir}"
+            printf 'INPUTS_JSON=%s\n' "${inputs_json}"
+          } >> "${GITHUB_ENV}"
+          {
+            echo "runner_name=${RUNNER_NAME}"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "cache_root=${best_root}"
+            echo "cache_free_bytes=${best_free}"
+            nvidia-smi -L
+            df -hT
+          } | tee "${run_dir}/runner.txt"
+
+      - name: Acquire and verify official public inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/bootstrap_multi_uav_lts_public_evidence.py \
+            --work-root "${WORK_ROOT}" \
+            --output-json "${INPUTS_JSON}" \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --expected-frame-count "${EXPECTED_FRAME_COUNT}" \
+            | tee "${RUN_DIR}/public-inputs-console.txt"
+
+      - name: Install and verify pinned GPU runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install_multi_uav_lts_public_runtime.sh \
+            "${VENV_PATH}" \
+            "${ASSET_DIR}" \
+            "${RUN_DIR}/runtime-provenance.json" \
+            | tee "${RUN_DIR}/runtime-install-console.txt"
+          bash scripts/install_multi_uav_lts_runtime_extras.sh \
+            "${VENV_PATH}" \
+            "${RUN_DIR}/runtime-provenance.json" \
+            | tee -a "${RUN_DIR}/runtime-install-console.txt"
+
+      - name: Generate and score cheap candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VENV_PATH}/bin/python" \
+            scripts/run_multi_uav_lts_fast_output_evidence.py \
+            --inputs-json "${INPUTS_JSON}" \
+            --run-dir "${RUN_DIR}" \
+            --device "${GPU_DEVICE}" \
+            --expected-sequence-count "${EXPECTED_SEQUENCE_COUNT}" \
+            --expected-frame-count "${EXPECTED_FRAME_COUNT}" \
+            | tee "${RUN_DIR}/fast-output-console.txt"
+
+      - name: Publish evidence summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "${GITHUB_STEP_SUMMARY}"
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          print("### Multi-UAV LTS fast output sweep")
+          run_dir_text = os.environ.get("RUN_DIR")
+          if not run_dir_text:
+              print("\nRun directory was not established.")
+              raise SystemExit(0)
+          run_dir = Path(run_dir_text)
+          success = run_dir / "evidence-summary.json"
+          failure = run_dir / "evidence-failure.json"
+          if success.is_file():
+              payload = json.loads(success.read_text(encoding="utf-8"))
+              print("\n- Result: **success**")
+          elif failure.is_file():
+              payload = json.loads(failure.read_text(encoding="utf-8"))
+              print("\n- Result: **failure**")
+              print(f"- Failed stage: `{payload.get('stage', 'unknown')}`")
+              print(f"- Failure: `{payload.get('exception_message', 'unknown')}`")
+          else:
+              print("\nNo machine-readable evidence result was produced.")
+              raise SystemExit(0)
+          tournament = payload.get("tournament")
+          if not isinstance(tournament, dict):
+              raise SystemExit(0)
+          print(f"- Selected: `{tournament.get('selected_candidate', 'unknown')}`")
+          print(f"- Status: `{tournament.get('selection_status', 'unknown')}`")
+          rows = tournament.get("rows")
+          if not isinstance(rows, list):
+              raise SystemExit(0)
+          print("\n| Candidate | Eligible | CV HOTA | Gain | MOTA Δ | IDF1 Δ |")
+          print("|---|---:|---:|---:|---:|---:|")
+          for row in rows:
+              print(
+                  f"| {row.get('name')} | {row.get('eligible')} | "
+                  f"{float(row.get('mean_cv_codabench_hota', 0.0)):.6f} | "
+                  f"{float(row.get('mean_cv_hota_gain_vs_raw', 0.0)):+.6f} | "
+                  f"{float(row.get('mean_cv_mota_delta_vs_raw', 0.0)):+.6f} | "
+                  f"{float(row.get('mean_cv_idf1_delta_vs_raw', 0.0)):+.6f} |"
+              )
+          PY
+
+      - name: Upload compact evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: multi-uav-lts-fast-output-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.RUN_DIR }}/runner.txt
+            ${{ env.RUN_DIR }}/public-inputs.json
+            ${{ env.RUN_DIR }}/public-inputs-console.txt
+            ${{ env.RUN_DIR }}/runtime-provenance.json
+            ${{ env.RUN_DIR }}/runtime-install-console.txt
+            ${{ env.RUN_DIR }}/proposal-source-manifest.json
+            ${{ env.RUN_DIR }}/proposal-baseline-console.txt
+            ${{ env.RUN_DIR }}/fast-output-console.txt
+            ${{ env.RUN_DIR }}/progress.json
+            ${{ env.RUN_DIR }}/evidence-summary.json
+            ${{ env.RUN_DIR }}/evidence-failure.json
+            ${{ env.RUN_DIR }}/raw/*.json
+            ${{ env.RUN_DIR }}/raw/*.csv
+            ${{ env.RUN_DIR }}/raw/*console.txt
+            ${{ env.RUN_DIR }}/raw_*/*.json
+            ${{ env.RUN_DIR }}/raw_*/*.csv
+            ${{ env.RUN_DIR }}/raw_*/*console.txt
+            ${{ env.RUN_DIR }}/tournament/*.json
+            ${{ env.RUN_DIR }}/tournament/*.csv
+            ${{ env.RUN_DIR }}/tournament/*console.txt
