@@ -1,0 +1,617 @@
+---
+name: Multi-UAV LTS anchored ReID evidence
+
+"on":
+  pull_request:
+    branches:
+      - agent/lts-nwd-reid-evidence
+    paths:
+      - ".github/workflows/multi-uav-lts-anchor-reid-evidence.yml"
+      - "scripts/run_multi_uav_lts_competition_tracker.py"
+      - "scripts/run_multi_uav_lts_official_baseline.py"
+      - "src/raft_uav/multi_uav_lts/_upstream_anchor_reid_patch.py"
+      - "src/raft_uav/multi_uav_lts/_upstream_association_template.py"
+      - "src/raft_uav/multi_uav_lts/upstream_patch.py"
+      - "tests/test_multi_uav_lts_anchor_reid.py"
+      - "tests/test_multi_uav_lts_upstream_patch.py"
+  workflow_dispatch:
+    inputs:
+      device:
+        description: CUDA device
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-uav-lts-anchor-reid-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
+  SUPPORT_COMMIT: fb62a792d41ba03ea46dfa5ba28d6bade5bfc9d4
+  SCENARIO_GATE_COMMIT: d097d728e0da88dae68210810b3af33d11b69b24
+  GPU_DEVICE: ${{ inputs.device || '0' }}
+
+jobs:
+  focused-tests:
+    name: Anchored ReID focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest -q \
+            tests/test_multi_uav_lts_upstream_patch.py \
+            tests/test_multi_uav_lts_competition_runner.py \
+            tests/test_multi_uav_lts_anchor_reid.py
+          python -m ruff check \
+            scripts/run_multi_uav_lts_competition_tracker.py \
+            scripts/run_multi_uav_lts_official_baseline.py \
+            src/raft_uav/multi_uav_lts/_upstream_anchor_reid_patch.py \
+            src/raft_uav/multi_uav_lts/_upstream_association_template.py \
+            src/raft_uav/multi_uav_lts/upstream_patch.py \
+            tests/test_multi_uav_lts_anchor_reid.py
+
+  evidence:
+    name: Anchored ReID successive-halving evidence
+    needs: focused-tests
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, nvidia-smi]
+    timeout-minutes: 2880
+
+    steps:
+      - name: Check out RaFT-UAV
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Select persistent work root
+        shell: bash
+        run: |
+          set -euo pipefail
+          minimum_free_bytes=$((20 * 1024 * 1024 * 1024))
+          best_root=""
+          best_free=0
+          candidates=(
+            "/mnt/corsair/raft-uav-public-evidence"
+            "${HOME}/.cache/raft-uav-public-evidence"
+            "${RUNNER_TEMP}/raft-uav-public-evidence"
+          )
+          for candidate in "${candidates[@]}"; do
+            free_bytes=0
+            if mkdir -p "${candidate}" 2>/dev/null; then
+              probe="${candidate}/.write-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              if printf 'ok\n' > "${probe}" 2>/dev/null; then
+                rm -f "${probe}"
+                free_bytes="$(df -PB1 "${candidate}" | awk 'NR == 2 {print $4}')"
+              fi
+            fi
+            if (( free_bytes > best_free )); then
+              best_root="${candidate}"
+              best_free="${free_bytes}"
+            fi
+          done
+          if [[ -z "${best_root}" ]] || (( best_free < minimum_free_bytes )); then
+            echo "No evidence cache has the required free space." >&2
+            exit 1
+          fi
+          work_root="${best_root}/multi-uav-lts-zenodo-15853476"
+          run_dir="${work_root}/anchor-reid-runs/${GITHUB_HEAD_SHA:-${GITHUB_SHA}}"
+          candidate_root="${work_root}/anchor-reid-candidate-cache-v1"
+          venv_path="${work_root}/runtime/venvs/proposal-graph-py311-torch222"
+          asset_dir="${work_root}/assets/runtime"
+          inputs_json="${run_dir}/public-inputs.json"
+          support_dir="${run_dir}/support"
+          mkdir -p \
+            "${run_dir}" \
+            "${candidate_root}" \
+            "${asset_dir}" \
+            "${support_dir}"
+          {
+            printf 'WORK_ROOT=%s\n' "${work_root}"
+            printf 'RUN_DIR=%s\n' "${run_dir}"
+            printf 'CANDIDATE_ROOT=%s\n' "${candidate_root}"
+            printf 'VENV_PATH=%s\n' "${venv_path}"
+            printf 'ASSET_DIR=%s\n' "${asset_dir}"
+            printf 'INPUTS_JSON=%s\n' "${inputs_json}"
+            printf 'SUPPORT_DIR=%s\n' "${support_dir}"
+          } >> "${GITHUB_ENV}"
+          nvidia-smi -L | tee "${run_dir}/runner.txt"
+
+      - name: Acquire pinned support
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${SUPPORT_COMMIT}"
+          for name in \
+            bootstrap_multi_uav_lts_public_evidence.py \
+            install_multi_uav_lts_public_runtime.sh \
+            install_multi_uav_lts_runtime_extras.sh; do
+            curl --location --fail --show-error --silent \
+              --retry 5 --output "${SUPPORT_DIR}/${name}" \
+              "${base}/scripts/${name}"
+          done
+          curl --location --fail --show-error --silent \
+            --retry 5 \
+            --output "${SUPPORT_DIR}/scenario_expert_gate.py" \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${SCENARIO_GATE_COMMIT}/src/raft_uav/multi_uav_lts/scenario_expert_gate.py"
+          chmod +x "${SUPPORT_DIR}"/*.sh
+
+      - name: Acquire and verify official training inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "${SUPPORT_DIR}/bootstrap_multi_uav_lts_public_evidence.py" \
+            --work-root "${WORK_ROOT}" \
+            --output-json "${INPUTS_JSON}" \
+            --expected-sequence-count 102 \
+            --expected-frame-count 77293 \
+            | tee "${RUN_DIR}/bootstrap-console.txt"
+          python - "${INPUTS_JSON}" >> "${GITHUB_ENV}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          dataset = payload["dataset"]
+          print(f"SEQUENCE_ROOT={dataset['train_sequence_root']}")
+          print(f"TRUTH_DIR={dataset['truth_dir']}")
+          print(f"SEED_DIR={dataset['first_frame_label_dir']}")
+          print(f"UPSTREAM_ROOT={payload['upstream']['checkout']}/BoT-SORT")
+          PY
+
+      - name: Install pinned GPU runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_DIR}/install_multi_uav_lts_public_runtime.sh" \
+            "${VENV_PATH}" "${ASSET_DIR}" "${RUN_DIR}/runtime-provenance.json" \
+            | tee "${RUN_DIR}/runtime-console.txt"
+          bash "${SUPPORT_DIR}/install_multi_uav_lts_runtime_extras.sh" \
+            "${VENV_PATH}" "${RUN_DIR}/runtime-provenance.json" \
+            | tee -a "${RUN_DIR}/runtime-console.txt"
+
+      - name: Choose a deterministic scenario-stratified screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${SEQUENCE_ROOT}" "${RUN_DIR}/screen-sequences.txt" <<'PY'
+          import re
+          import sys
+          from collections import defaultdict
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          output = Path(sys.argv[2])
+          suffixes = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
+          groups = defaultdict(list)
+          for sequence_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+              match = re.fullmatch(r"(.+)_\d+", sequence_dir.name)
+              prefix = match.group(1) if match else sequence_dir.name
+              frames = sum(
+                  path.is_file() and path.suffix.lower() in suffixes
+                  for path in sequence_dir.iterdir()
+              )
+              groups[prefix].append((frames, sequence_dir.name))
+          selected = []
+          for prefix in sorted(groups):
+              rows = sorted(groups[prefix])
+              selected.append(rows[0][1])
+              if len(rows) > 1:
+                  selected.append(rows[-1][1])
+          if len(selected) < 12:
+              raise SystemExit("scenario-stratified screen is unexpectedly small")
+          output.write_text("\n".join(selected) + "\n", encoding="utf-8")
+          print(f"screen_sequence_count={len(selected)}")
+          print("\n".join(selected))
+          PY
+
+      - name: Screen anchor, phase, threshold, and crop variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t screen_sequences < "${RUN_DIR}/screen-sequences.txt"
+          mkdir -p "${RUN_DIR}/screen"
+          declare -A variants
+          variants[control]="--anchor-weight 0 --reid-crop-scales 1.0"
+          variants[crop085]="--anchor-weight 0 --reid-crop-scales 0.85"
+          variants[crop125]="--anchor-weight 0 --reid-crop-scales 1.25"
+          variants[crop150]="--anchor-weight 0 --reid-crop-scales 1.5"
+          variants[crop_ensemble]="--anchor-weight 0 --reid-crop-scales 1.0,1.25"
+          variants[crop_ensemble_wide]="--anchor-weight 0 --reid-crop-scales 1.0,1.25,1.5"
+          variants[anchor025]="--anchor-weight 0.25 --reid-crop-scales 1.0"
+          variants[anchor050]="--anchor-weight 0.5 --reid-crop-scales 1.0"
+          variants[anchor075]="--anchor-weight 0.75 --reid-crop-scales 1.0"
+          variants[anchor_ensemble]="--anchor-weight 0.5 --reid-crop-scales 1.0,1.25"
+          variants[anchor_decay]="--anchor-weight 0.75 --anchor-weight-late 0.25 --appearance-weight 0.3 --appearance-weight-late 0.15 --appearance-thresh 0.25 --appearance-thresh-late 0.2 --reid-crop-scales 1.0,1.25"
+          variants[anchor_rise]="--anchor-weight 0.25 --anchor-weight-late 0.75 --appearance-weight 0.15 --appearance-weight-late 0.3 --appearance-thresh 0.25 --appearance-thresh-late 0.3 --reid-crop-scales 1.0,1.25"
+          variants[anchor_strict_late]="--anchor-weight 0.5 --anchor-weight-late 0.75 --appearance-weight 0.25 --appearance-weight-late 0.25 --appearance-thresh 0.25 --appearance-thresh-late 0.15 --reid-crop-scales 1.0,1.25"
+
+          printf '%s\n' "${!variants[@]}" | sort > "${RUN_DIR}/candidate-names.txt"
+          while IFS= read -r name; do
+            read -r -a variant_args <<< "${variants[${name}]}"
+            output="${CANDIDATE_ROOT}/${name}"
+            mkdir -p "${output}"
+            "${VENV_PATH}/bin/python" scripts/run_multi_uav_lts_competition_tracker.py \
+              --association-mode gated-weighted \
+              --nwd-weight 0.5 \
+              --nwd-scale 20 \
+              --appearance-weight 0.25 \
+              --appearance-min-side 16 \
+              --motion-gate \
+              --no-closed-world \
+              --coast-frames 0 \
+              "${variant_args[@]}" \
+              --work-root "${WORK_ROOT}" \
+              --botsort-root "${UPSTREAM_ROOT}" \
+              --sequence-root "${SEQUENCE_ROOT}" \
+              --first-frame-label-dir "${SEED_DIR}" \
+              --no-template \
+              --output-dir "${output}" \
+              --python "${VENV_PATH}/bin/python" \
+              --device "${GPU_DEVICE}" \
+              --img-size 1920 \
+              --sequences "${screen_sequences[@]}" \
+              | tee "${RUN_DIR}/screen/${name}-console.txt"
+            "${VENV_PATH}/bin/python" scripts/score_multi_uav_lts_trackeval.py \
+              "${output}/predictions" "${TRUTH_DIR}" \
+              --trackeval-root "${UPSTREAM_ROOT}/TrackEval" \
+              --sequence-root "${SEQUENCE_ROOT}" \
+              --sequences "${screen_sequences[@]}" \
+              --output-json "${RUN_DIR}/screen/${name}-score.json" \
+              | tee "${RUN_DIR}/screen/${name}-score-console.txt"
+          done < "${RUN_DIR}/candidate-names.txt"
+
+      - name: Select two guarded screen survivors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUN_DIR}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          names = root.joinpath("candidate-names.txt").read_text().split()
+          scores = {
+              name: json.loads(
+                  root.joinpath("screen", f"{name}-score.json").read_text()
+              )["combined"]
+              for name in names
+          }
+          control = scores["control"]
+          eligible = []
+          for name, score in scores.items():
+              if name == "control":
+                  continue
+              if score["mota"] < control["mota"] - 0.002:
+                  continue
+              if score["idf1"] < control["idf1"] - 0.002:
+                  continue
+              eligible.append(
+                  (
+                      float(score["hota"]),
+                      float(score["idf1"]),
+                      float(score["mota"]),
+                      name,
+                  )
+              )
+          eligible.sort(reverse=True)
+          winners = [row[-1] for row in eligible[:2]]
+          if not winners:
+              winners = [
+                  name
+                  for name in sorted(scores)
+                  if name != "control"
+              ][:2]
+          root.joinpath("screen-winners.txt").write_text(
+              "\n".join(winners) + "\n",
+              encoding="utf-8",
+          )
+          payload = {
+              "schema": "raft-uav-lts-anchor-reid-screen-v1",
+              "control": control,
+              "scores": scores,
+              "winners": winners,
+          }
+          root.joinpath("screen-selection.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Complete control and survivors on all 102 sequences
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A variants
+          variants[control]="--anchor-weight 0 --reid-crop-scales 1.0"
+          variants[crop085]="--anchor-weight 0 --reid-crop-scales 0.85"
+          variants[crop125]="--anchor-weight 0 --reid-crop-scales 1.25"
+          variants[crop150]="--anchor-weight 0 --reid-crop-scales 1.5"
+          variants[crop_ensemble]="--anchor-weight 0 --reid-crop-scales 1.0,1.25"
+          variants[crop_ensemble_wide]="--anchor-weight 0 --reid-crop-scales 1.0,1.25,1.5"
+          variants[anchor025]="--anchor-weight 0.25 --reid-crop-scales 1.0"
+          variants[anchor050]="--anchor-weight 0.5 --reid-crop-scales 1.0"
+          variants[anchor075]="--anchor-weight 0.75 --reid-crop-scales 1.0"
+          variants[anchor_ensemble]="--anchor-weight 0.5 --reid-crop-scales 1.0,1.25"
+          variants[anchor_decay]="--anchor-weight 0.75 --anchor-weight-late 0.25 --appearance-weight 0.3 --appearance-weight-late 0.15 --appearance-thresh 0.25 --appearance-thresh-late 0.2 --reid-crop-scales 1.0,1.25"
+          variants[anchor_rise]="--anchor-weight 0.25 --anchor-weight-late 0.75 --appearance-weight 0.15 --appearance-weight-late 0.3 --appearance-thresh 0.25 --appearance-thresh-late 0.3 --reid-crop-scales 1.0,1.25"
+          variants[anchor_strict_late]="--anchor-weight 0.5 --anchor-weight-late 0.75 --appearance-weight 0.25 --appearance-weight-late 0.25 --appearance-thresh 0.25 --appearance-thresh-late 0.15 --reid-crop-scales 1.0,1.25"
+
+          {
+            printf 'control\n'
+            cat "${RUN_DIR}/screen-winners.txt"
+          } > "${RUN_DIR}/full-candidates.txt"
+          mkdir -p "${RUN_DIR}/full"
+          while IFS= read -r name; do
+            read -r -a variant_args <<< "${variants[${name}]}"
+            output="${CANDIDATE_ROOT}/${name}"
+            "${VENV_PATH}/bin/python" scripts/run_multi_uav_lts_competition_tracker.py \
+              --association-mode gated-weighted \
+              --nwd-weight 0.5 \
+              --nwd-scale 20 \
+              --appearance-weight 0.25 \
+              --appearance-min-side 16 \
+              --motion-gate \
+              --no-closed-world \
+              --coast-frames 0 \
+              "${variant_args[@]}" \
+              --work-root "${WORK_ROOT}" \
+              --botsort-root "${UPSTREAM_ROOT}" \
+              --sequence-root "${SEQUENCE_ROOT}" \
+              --first-frame-label-dir "${SEED_DIR}" \
+              --no-template \
+              --output-dir "${output}" \
+              --python "${VENV_PATH}/bin/python" \
+              --device "${GPU_DEVICE}" \
+              --img-size 1920 \
+              | tee "${RUN_DIR}/full/${name}-console.txt"
+            "${VENV_PATH}/bin/python" scripts/score_multi_uav_lts_trackeval.py \
+              "${output}/predictions" "${TRUTH_DIR}" \
+              --trackeval-root "${UPSTREAM_ROOT}/TrackEval" \
+              --sequence-root "${SEQUENCE_ROOT}" \
+              --output-json "${RUN_DIR}/full/${name}-score.json" \
+              | tee "${RUN_DIR}/full/${name}-score-console.txt"
+          done < "${RUN_DIR}/full-candidates.txt"
+
+      - name: Fit a guarded scenario-prefix mixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUN_DIR}" <<'PY'
+          import csv
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          for name in root.joinpath("full-candidates.txt").read_text().split():
+              report = json.loads(
+                  root.joinpath("full", f"{name}-score.json").read_text()
+              )
+              path = root.joinpath("full", f"{name}-sequence-scores.csv")
+              with path.open("w", encoding="utf-8", newline="") as handle:
+                  writer = csv.DictWriter(
+                      handle,
+                      fieldnames=[
+                          "sequence",
+                          "CODABENCH_HOTA",
+                          "CODABENCH_MOTA",
+                          "CODABENCH_IDF1",
+                      ],
+                  )
+                  writer.writeheader()
+                  for sequence, metrics in sorted(report["sequences"].items()):
+                      writer.writerow(
+                          {
+                              "sequence": sequence,
+                              "CODABENCH_HOTA": metrics["hota"],
+                              "CODABENCH_MOTA": metrics["mota"],
+                              "CODABENCH_IDF1": metrics["idf1"],
+                          }
+                      )
+          PY
+
+          fit_args=()
+          while IFS= read -r name; do
+            fit_args+=(--score-csv "${name}=${RUN_DIR}/full/${name}-sequence-scores.csv")
+            fit_args+=(--candidate "${name}=${CANDIDATE_ROOT}/${name}/predictions")
+          done < "${RUN_DIR}/full-candidates.txt"
+          "${VENV_PATH}/bin/python" "${SUPPORT_DIR}/scenario_expert_gate.py" fit \
+            "${fit_args[@]}" \
+            --raw-candidate control \
+            --output-dir "${RUN_DIR}/scenario-mixture" \
+            --fold-count 5 \
+            --min-prefix-samples 3 \
+            --min-train-hota-gain 0.0005 \
+            --min-cv-hota-gain 0.0002 \
+            --max-train-mota-drop 0.002 \
+            --max-train-idf1-drop 0.002 \
+            --max-cv-mota-drop 0.002 \
+            --max-cv-idf1-drop 0.002 \
+            --max-worst-prefix-hota-drop 0.003 \
+            | tee "${RUN_DIR}/scenario-mixture-console.txt"
+          "${VENV_PATH}/bin/python" scripts/score_multi_uav_lts_trackeval.py \
+            "${RUN_DIR}/scenario-mixture/predictions" "${TRUTH_DIR}" \
+            --trackeval-root "${UPSTREAM_ROOT}/TrackEval" \
+            --sequence-root "${SEQUENCE_ROOT}" \
+            --output-json "${RUN_DIR}/full/scenario_mixture-score.json" \
+            | tee "${RUN_DIR}/full/scenario_mixture-score-console.txt"
+
+      - name: Run paired bootstrap guard and select candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${RUN_DIR}" <<'PY'
+          import json
+          import random
+          import statistics
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          names = root.joinpath("full-candidates.txt").read_text().split()
+          names.append("scenario_mixture")
+          reports = {
+              name: json.loads(
+                  root.joinpath("full", f"{name}-score.json").read_text()
+              )
+              for name in names
+          }
+          control = reports["control"]
+          sequences = sorted(control["sequences"])
+          rng = random.Random(20260827)
+
+          def interval(values, draws=10000):
+              means = []
+              for _ in range(draws):
+                  means.append(
+                      statistics.fmean(
+                          values[rng.randrange(len(values))]
+                          for _ in values
+                      )
+                  )
+              means.sort()
+              return means[int(0.025 * draws)], means[int(0.975 * draws)]
+
+          rows = {}
+          eligible = []
+          for name in names:
+              report = reports[name]
+              metrics = report["combined"]
+              if name == "control":
+                  rows[name] = {
+                      "combined": metrics,
+                      "selected_against_control": True,
+                  }
+                  continue
+              hota_delta = [
+                  report["sequences"][sequence]["hota"]
+                  - control["sequences"][sequence]["hota"]
+                  for sequence in sequences
+              ]
+              mota_delta = metrics["mota"] - control["combined"]["mota"]
+              idf1_delta = metrics["idf1"] - control["combined"]["idf1"]
+              hota_interval = interval(hota_delta)
+              passes = (
+                  hota_interval[0] > 0.0
+                  and mota_delta >= -0.002
+                  and idf1_delta >= -0.002
+              )
+              rows[name] = {
+                  "combined": metrics,
+                  "hota_delta": statistics.fmean(hota_delta),
+                  "hota_delta_ci95": list(hota_interval),
+                  "mota_delta": mota_delta,
+                  "idf1_delta": idf1_delta,
+                  "selected_against_control": passes,
+              }
+              if passes:
+                  eligible.append((metrics["hota"], metrics["idf1"], name))
+          selected = max(eligible)[-1] if eligible else "control"
+          payload = {
+              "schema": "raft-uav-lts-anchor-reid-tournament-v1",
+              "control": "control",
+              "selected": selected,
+              "candidates": rows,
+          }
+          root.joinpath("comparison.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "${GITHUB_STEP_SUMMARY}"
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ.get("RUN_DIR", "."))
+          print("### Multi-UAV LTS anchored ReID experiment")
+          comparison = root / "comparison.json"
+          if not comparison.is_file():
+              print("\nThe full tournament has not completed.")
+              raise SystemExit(0)
+          payload = json.loads(comparison.read_text(encoding="utf-8"))
+          print(f"\nSelected candidate: **{payload['selected']}**")
+          print("\n| Candidate | HOTA | MOTA | IDF1 | HOTA delta CI | passes |")
+          print("|---|---:|---:|---:|---:|:---:|")
+          for name, row in payload["candidates"].items():
+              metrics = row["combined"]
+              interval = row.get("hota_delta_ci95")
+              interval_text = (
+                  "control"
+                  if interval is None
+                  else f"[{interval[0]:+.6f}, {interval[1]:+.6f}]"
+              )
+              print(
+                  f"| {name} | {metrics['hota']:.6f} | "
+                  f"{metrics['mota']:.6f} | {metrics['idf1']:.6f} | "
+                  f"{interval_text} | "
+                  f"{'yes' if row['selected_against_control'] else 'no'} |"
+              )
+          PY
+
+      - name: Upload compact evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: multi-uav-lts-anchor-reid-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.RUN_DIR }}/runner.txt
+            ${{ env.RUN_DIR }}/public-inputs.json
+            ${{ env.RUN_DIR }}/runtime-provenance.json
+            ${{ env.RUN_DIR }}/screen-sequences.txt
+            ${{ env.RUN_DIR }}/candidate-names.txt
+            ${{ env.RUN_DIR }}/screen-selection.json
+            ${{ env.RUN_DIR }}/screen/*-score.json
+            ${{ env.RUN_DIR }}/full-candidates.txt
+            ${{ env.RUN_DIR }}/full/*-score.json
+            ${{ env.RUN_DIR }}/full/*-sequence-scores.csv
+            ${{ env.RUN_DIR }}/scenario-mixture/policy.json
+            ${{ env.RUN_DIR }}/scenario-mixture/cv_sequence_rows.csv
+            ${{ env.RUN_DIR }}/scenario-mixture/cv_fold_rows.csv
+            ${{ env.RUN_DIR }}/scenario-mixture/fit_summary.json
+            ${{ env.RUN_DIR }}/comparison.json
