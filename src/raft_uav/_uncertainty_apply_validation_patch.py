@@ -1,4 +1,4 @@
-"""Validate uncertainty application and covariance fallback inputs."""
+"""Validate uncertainty application, covariance fallbacks, and finite features."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import numpy as np
 
 _APPLY_PATCH_MARKER = "_raft_uav_validates_empty_uncertainty_apply"
 _COVARIANCE_PATCH_MARKER = "_raft_uav_validates_uncertainty_fallback_covariance"
+_FEATURE_PATCH_MARKER = "_raft_uav_stabilizes_uncertainty_velocity_norm"
+_FLOAT_MAX = np.finfo(float).max
 
 
 def _validated_fallback_covariance(value: object, *, dim: int) -> np.ndarray:
@@ -53,8 +55,26 @@ def _validated_fallback_covariance(value: object, *, dim: int) -> np.ndarray:
     return covariance
 
 
+def _stable_velocity_norm(
+    east_mps: np.ndarray,
+    north_mps: np.ndarray,
+    down_mps: np.ndarray,
+) -> np.ndarray:
+    """Return finite overflow-stable velocity norms for finite components."""
+
+    components = np.column_stack([east_mps, north_mps, down_mps])
+    with np.errstate(over="ignore", invalid="ignore"):
+        norms = np.hypot.reduce(components, axis=1)
+    return np.nan_to_num(
+        norms,
+        nan=0.0,
+        posinf=_FLOAT_MAX,
+        neginf=_FLOAT_MAX,
+    )
+
+
 def install() -> None:
-    """Install uncertainty source-head and covariance-fallback validation."""
+    """Install uncertainty source-head, covariance, and feature validation."""
 
     from raft_uav import uncertainty as uncertainty_module
 
@@ -106,3 +126,41 @@ def install() -> None:
             True,
         )
         uncertainty_module.covariance_from_row = validated_covariance_from_row
+
+    legacy = uncertainty_module._legacy
+    original_feature_frame: Callable[..., Any] = legacy._feature_frame
+    if not getattr(original_feature_frame, _FEATURE_PATCH_MARKER, False):
+
+        @wraps(original_feature_frame)
+        def stable_feature_frame(frame, source):
+            if source != "radar":
+                return original_feature_frame(frame, source)
+
+            with np.errstate(over="ignore", invalid="ignore"):
+                out = original_feature_frame(frame, source)
+            east_mps = legacy._num(
+                frame,
+                ("velocity_east_mps", "v_east_mps"),
+                0.0,
+            )
+            north_mps = legacy._num(
+                frame,
+                ("velocity_north_mps", "v_north_mps"),
+                0.0,
+            )
+            down_mps = legacy._num(
+                frame,
+                ("velocity_down_mps", "v_down_mps"),
+                0.0,
+            )
+            out = out.copy()
+            out["velocity_norm"] = _stable_velocity_norm(
+                east_mps,
+                north_mps,
+                down_mps,
+            )
+            return out
+
+        setattr(stable_feature_frame, _FEATURE_PATCH_MARKER, True)
+        legacy._feature_frame = stable_feature_frame
+        uncertainty_module._feature_frame = stable_feature_frame
