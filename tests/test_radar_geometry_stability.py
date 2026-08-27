@@ -19,6 +19,13 @@ def test_radar_geometry_preserves_ordinary_summary_output() -> None:
     assert stability._stable_series_summary(series) == expected
 
 
+def test_radar_geometry_stability_patch_reaches_backing_implementation() -> None:
+    backing_impl = stability._radar_geometry._IMPL
+
+    assert backing_impl.build_radar_geometry_audit_frame is stability.build_radar_geometry_audit_frame
+    assert backing_impl._series_summary is stability._stable_series_summary
+
+
 def test_radar_geometry_keeps_large_representable_distances_finite() -> None:
     radar = pd.DataFrame(
         {
