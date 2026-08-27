@@ -359,6 +359,20 @@ def _finite_truth_by_time(truth: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _overflow_stable_norm(values: np.ndarray, *, axis: int) -> np.ndarray:
+    """Preserve ordinary norms and repair only finite-input overflow results."""
+
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        norms = np.asarray(np.linalg.norm(array, axis=axis), dtype=float)
+    finite_inputs = np.isfinite(array).all(axis=axis)
+    repair = finite_inputs & ~np.isfinite(norms)
+    if bool(np.any(repair)):
+        norms = norms.copy()
+        norms[repair] = np.hypot.reduce(np.abs(array[repair]), axis=axis)
+    return norms
+
+
 def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
     """Attach interpolated truth errors only inside the finite truth time span."""
 
@@ -390,13 +404,71 @@ def add_truth_errors(estimates: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFra
         .apply(pd.to_numeric, errors="coerce")
         .to_numpy(float)
     )
-    err = est_xyz - interp
+    with np.errstate(over="ignore", invalid="ignore"):
+        err = est_xyz - interp
     out["truth_x_m"] = interp[:, 0]
     out["truth_y_m"] = interp[:, 1]
     out["truth_z_m"] = interp[:, 2]
-    out["error_2d_m"] = np.linalg.norm(err[:, :2], axis=1)
-    out["error_3d_m"] = np.linalg.norm(err, axis=1)
+    out["error_2d_m"] = _overflow_stable_norm(err[:, :2], axis=1)
+    out["error_3d_m"] = _overflow_stable_norm(err, axis=1)
     return out
+
+
+def _stable_nonnegative_mean(values: np.ndarray) -> float:
+    """Return a mean without overflowing the intermediate sum."""
+
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        ordinary = float(np.mean(array))
+    if np.isfinite(ordinary):
+        return ordinary
+    scale = float(np.max(array))
+    if scale == 0.0:
+        return 0.0
+    return float(scale * np.mean(array / scale))
+
+
+def _stable_root_mean_square(values: np.ndarray) -> float:
+    """Return RMS without squaring unscaled large finite values."""
+
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        ordinary = float(np.sqrt(np.mean(array**2)))
+    if np.isfinite(ordinary):
+        return ordinary
+    scale = float(np.max(np.abs(array)))
+    if scale == 0.0:
+        return 0.0
+    scaled = array / scale
+    return float(scale * np.sqrt(np.mean(scaled**2)))
+
+
+def compute_metrics(estimates: pd.DataFrame, truth: pd.DataFrame | None) -> dict[str, object]:
+    """Summarize tracker errors without overflowing representable statistics."""
+
+    del truth
+    if estimates is None or estimates.empty or "error_3d_m" not in estimates.columns:
+        return {"count": int(len(estimates)) if estimates is not None else 0}
+    err3 = pd.to_numeric(estimates["error_3d_m"], errors="coerce").to_numpy(float)
+    err2 = (
+        pd.to_numeric(estimates["error_2d_m"], errors="coerce").to_numpy(float)
+        if "error_2d_m" in estimates.columns
+        else np.array([], dtype=float)
+    )
+    finite3 = err3[np.isfinite(err3)]
+    finite2 = err2[np.isfinite(err2)]
+    if finite3.size == 0:
+        return {"count": 0}
+    return {
+        "count": int(finite3.size),
+        "mean_3d_m": _stable_nonnegative_mean(finite3),
+        "rmse_3d_m": _stable_root_mean_square(finite3),
+        "p95_3d_m": float(np.percentile(finite3, 95.0)),
+        "max_3d_m": float(np.max(finite3)),
+        "mean_2d_m": _stable_nonnegative_mean(finite2) if finite2.size else None,
+        "p95_2d_m": float(np.percentile(finite2, 95.0)) if finite2.size else None,
+        "max_2d_m": float(np.max(finite2)) if finite2.size else None,
+    }
 
 
 _LEGACY._candidate_rows_with_optional_defaults = _candidate_rows_with_optional_defaults
@@ -406,3 +478,4 @@ _LEGACY.run_mmuad_tracker = run_mmuad_tracker
 _LEGACY._run_sequence_filter = _run_sequence_filter
 _LEGACY._finite_truth_by_time = _finite_truth_by_time
 _LEGACY.add_truth_errors = add_truth_errors
+_LEGACY.compute_metrics = compute_metrics
