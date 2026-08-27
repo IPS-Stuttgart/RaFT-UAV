@@ -227,6 +227,12 @@ def _oracle_coverage_sequence_scope_install() -> Callable[[], None]:
     return install
 
 
+def _oracle_coverage_numeric_stability_install() -> Callable[[], None]:
+    from raft_uav.evaluation._oracle_coverage_numeric_stability_patch import install
+
+    return install
+
+
 def _estimate_sequence_apply_coverage_install() -> Callable[[], None]:
     from raft_uav.mmuad._estimate_sequence_apply_coverage_patch import install
 
@@ -324,6 +330,7 @@ _optional_runtime_hook(_candidate_pull_time_tolerance_install)
 _optional_runtime_hook(_radar_frame_grouping_install)
 _optional_runtime_hook(_paper_selection_numeric_time_install)
 _optional_runtime_hook(_oracle_coverage_sequence_scope_install)
+_optional_runtime_hook(_oracle_coverage_numeric_stability_install)
 _optional_runtime_hook(_estimate_sequence_apply_coverage_install)
 _optional_runtime_hook(_track5_rts_template_validation_install)
 _optional_runtime_hook(_geomedian_template_time_match_install)
