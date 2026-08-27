@@ -14,7 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from ._upstream_patch_common import _PATCH_MARKER, UpstreamPatchError
+from ._upstream_patch_common import UpstreamPatchError
 from ._upstream_patch_inference import _patch_inference
 from ._upstream_patch_mc import _patch_mc_bot_sort
 
