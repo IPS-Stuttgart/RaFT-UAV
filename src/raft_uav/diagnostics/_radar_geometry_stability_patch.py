@@ -106,13 +106,24 @@ def build_radar_geometry_audit_frame(
 
 
 def install() -> None:
-    """Install stable radar-geometry computations once per interpreter."""
+    """Install stable computations on both radar-geometry import layers."""
 
-    if getattr(_radar_geometry, _PATCH_MARKER, False):
-        return
-    _radar_geometry.build_radar_geometry_audit_frame = build_radar_geometry_audit_frame
-    _radar_geometry._series_summary = _stable_series_summary
-    setattr(_radar_geometry, _PATCH_MARKER, True)
+    # ``raft_uav.diagnostics.radar_geometry`` is a compatibility package that
+    # loads the maintained sibling ``radar_geometry.py`` as ``_IMPL``.  Patching
+    # only the compatibility package leaves function globals inside ``_IMPL``
+    # unchanged, so its summaries and CLI helpers continue to call the unstable
+    # implementations.  Patch both module objects independently.
+    targets = [_radar_geometry]
+    backing_impl = getattr(_radar_geometry, "_IMPL", None)
+    if backing_impl is not None and backing_impl is not _radar_geometry:
+        targets.append(backing_impl)
+
+    for target in targets:
+        if getattr(target, _PATCH_MARKER, False):
+            continue
+        target.build_radar_geometry_audit_frame = build_radar_geometry_audit_frame
+        target._series_summary = _stable_series_summary
+        setattr(target, _PATCH_MARKER, True)
 
 
 install()
