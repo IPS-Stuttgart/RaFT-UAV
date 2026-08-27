@@ -95,6 +95,30 @@ def test_assignment_keeps_rounded_search_bound_inside_tolerance() -> None:
     assert assignment == {0: 0}
 
 
+def test_assignment_ignores_overflowing_far_gap_under_strict_errstate() -> None:
+    with np.errstate(over="raise", invalid="raise"):
+        assignment = optimal_timestamp_assignment(
+            [1.0e308],
+            [-1.0e308, 1.0e308],
+            tolerance_s=1.0e307,
+        )
+
+    assert assignment == {0: 1}
+
+
+def test_assignment_handles_overflowing_search_bound_under_strict_errstate() -> None:
+    largest = np.finfo(float).max
+
+    with np.errstate(over="raise", invalid="raise"):
+        assignment = optimal_timestamp_assignment(
+            [largest],
+            [largest],
+            tolerance_s=largest,
+        )
+
+    assert assignment == {0: 0}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
