@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
