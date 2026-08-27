@@ -31,6 +31,7 @@ from raft_uav.multi_uav_lts.cli import (  # noqa: E402
 
 
 DEFAULT_WORK_ROOT = Path("/mnt/lexar4tb/multi_uav_lts")
+_IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,9 +60,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--proximity-thresh", type=float)
     parser.add_argument("--appearance-thresh", type=float)
     parser.add_argument("--device", default=os.environ.get("GPU_ID", "0"))
-    parser.add_argument("--shard-index", type=int, default=int(os.environ.get("SHARD_INDEX", "0")))
-    parser.add_argument("--shard-count", type=int, default=int(os.environ.get("SHARD_COUNT", "1")))
-    parser.add_argument("--sequences", nargs="*", help="optional sequence names to run/package")
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=int(os.environ.get("SHARD_INDEX", "0")),
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=int(os.environ.get("SHARD_COUNT", "1")),
+    )
+    parser.add_argument(
+        "--sequences",
+        nargs="*",
+        help="optional sequence names to run/package",
+    )
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--no-reid", action="store_true")
     parser.add_argument("--fast-reid-config", default="logs/sbs_S50/config.yaml")
@@ -132,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"multi_uav_lts_submission_zip={paths['submission_zip']}")
     print(
         "multi_uav_lts_valid="
-        + ("not_run_dry_run" if validation_payload is None else str(validation_payload["valid"]))
+        + (
+            "not_run_dry_run"
+            if validation_payload is None
+            else str(validation_payload["valid"])
+        )
     )
     if validation_payload is not None and not validation_payload["valid"]:
         return 1
@@ -141,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def _resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
     work_root = args.work_root
-    output_dir = args.output_dir or work_root / "outputs/official_baseline_via_first_init"
+    output_dir = (
+        args.output_dir or work_root / "outputs/official_baseline_via_first_init"
+    )
     return {
         "work_root": work_root,
         "botsort_root": args.botsort_root
@@ -149,14 +168,19 @@ def _resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
         "sequence_root": args.sequence_root or work_root / "extracted/TestImages",
         "first_frame_label_dir": args.first_frame_label_dir
         or work_root / "extracted/TestLabels_FirstFrameOnly",
-        "template_zip": None
-        if args.no_template
-        else args.template_zip or work_root / "downloads/submission.zip",
+        "template_zip": (
+            None
+            if args.no_template
+            else args.template_zip or work_root / "downloads/submission.zip"
+        ),
         "output_dir": output_dir,
-        "predictions_dir": args.predictions_dir or output_dir / "predictions",
+        "predictions_dir": args.predictions_dir
+        or output_dir / "predictions",
         "submission_zip": args.submission_zip or output_dir / "submission.zip",
-        "summary_json": args.summary_json or output_dir / "multi_uav_lts_run_summary.json",
-        "file_summary_csv": args.file_summary_csv or output_dir / "submission_file_summary.csv",
+        "summary_json": args.summary_json
+        or output_dir / "multi_uav_lts_run_summary.json",
+        "file_summary_csv": args.file_summary_csv
+        or output_dir / "submission_file_summary.csv",
     }
 
 
@@ -171,37 +195,71 @@ def _validate_inputs(
             if not paths[key].exists():
                 raise FileNotFoundError(f"{key} does not exist: {paths[key]}")
     if paths["template_zip"] is not None and not paths["template_zip"].exists():
-        raise FileNotFoundError(f"template_zip does not exist: {paths['template_zip']}")
-    if require_botsort and not (paths["botsort_root"] / "tools/inference.py").exists():
+        raise FileNotFoundError(
+            f"template_zip does not exist: {paths['template_zip']}"
+        )
+    if require_botsort and not (
+        paths["botsort_root"] / "tools/inference.py"
+    ).exists():
         raise FileNotFoundError(
             f"missing YOLOv12-BoT-SORT inference.py under {paths['botsort_root']}"
         )
 
 
-def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dict[str, Any]]:
-    sequences = [path for path in sorted(paths["sequence_root"].iterdir()) if path.is_dir()]
+def _sequence_frame_count(sequence_dir: Path) -> int:
+    count = sum(
+        1
+        for path in sequence_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES
+    )
+    if count <= 0:
+        raise ValueError(f"sequence contains no top-level images: {sequence_dir}")
+    return count
+
+
+def _run_sequences(
+    args: argparse.Namespace,
+    paths: dict[str, Path],
+) -> list[dict[str, Any]]:
+    sequences = [
+        path
+        for path in sorted(paths["sequence_root"].iterdir())
+        if path.is_dir()
+    ]
     if args.sequences:
         sequence_filter = set(args.sequences)
         sequences = [path for path in sequences if path.name in sequence_filter]
     records: list[dict[str, Any]] = []
-    env = os.environ.copy()
+    base_env = os.environ.copy()
     botsort_root = paths["botsort_root"]
-    env["PYTHONPATH"] = ":".join(
+    base_env["PYTHONPATH"] = ":".join(
         str(path)
         for path in (botsort_root / "yolov12", botsort_root)
         if path.exists()
-    ) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
+    ) + (
+        f":{base_env['PYTHONPATH']}"
+        if base_env.get("PYTHONPATH")
+        else ""
+    )
 
     for index, sequence_dir in enumerate(sequences):
         if index % args.shard_count != args.shard_index:
             continue
         sequence = sequence_dir.name
+        frame_count = _sequence_frame_count(sequence_dir)
+        sequence_env = base_env.copy()
+        sequence_env["RAFT_UAV_LTS_SEQUENCE_FRAME_COUNT"] = str(frame_count)
         prediction_path = paths["predictions_dir"] / f"{sequence}.txt"
         log_path = paths["output_dir"] / "logs" / f"{sequence}.log"
-        if prediction_path.exists() and prediction_path.stat().st_size > 0 and not args.overwrite:
+        if (
+            prediction_path.exists()
+            and prediction_path.stat().st_size > 0
+            and not args.overwrite
+        ):
             records.append(
                 {
                     "sequence": sequence,
+                    "sequence_frame_count": frame_count,
                     "status": "skipped_existing",
                     "prediction": str(prediction_path),
                 }
@@ -210,6 +268,7 @@ def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dic
         command = _inference_command(args, paths, sequence_dir)
         record = {
             "sequence": sequence,
+            "sequence_frame_count": frame_count,
             "status": "dry_run" if args.dry_run else "planned",
             "command": " ".join(shlex.quote(part) for part in command),
             "prediction": str(prediction_path),
@@ -220,7 +279,7 @@ def _run_sequences(args: argparse.Namespace, paths: dict[str, Path]) -> list[dic
                 completed = subprocess.run(
                     command,
                     cwd=paths["botsort_root"],
-                    env=env,
+                    env=sequence_env,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                     check=False,
@@ -275,7 +334,11 @@ def _inference_command(
         )
     _append_optional_value(command, "--conf-thres", args.conf_thres)
     _append_optional_value(command, "--iou-thres", args.iou_thres)
-    _append_optional_value(command, "--track_high_thresh", args.track_high_thresh)
+    _append_optional_value(
+        command,
+        "--track_high_thresh",
+        args.track_high_thresh,
+    )
     _append_optional_value(command, "--track_low_thresh", args.track_low_thresh)
     _append_optional_value(command, "--new_track_thresh", args.new_track_thresh)
     _append_optional_value(command, "--match_thresh", args.match_thresh)
@@ -288,14 +351,21 @@ def _inference_command(
     return command
 
 
-def _append_optional_value(command: list[str], flag: str, value: object | None) -> None:
+def _append_optional_value(
+    command: list[str],
+    flag: str,
+    value: object | None,
+) -> None:
     if value is not None:
         command.extend([flag, str(value)])
 
 
 def _write_json(payload: object, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
