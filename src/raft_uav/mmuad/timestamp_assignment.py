@@ -38,6 +38,12 @@ def _solve_sparse_assignment(
     return assignment
 
 
+def _timestamp_gap_s(left: float, right: float) -> float:
+    """Return an absolute finite-timestamp gap without NumPy overflow signaling."""
+
+    return abs(float(left) - float(right))
+
+
 def _assignment_error(
     assignment: dict[int, int],
     requests: np.ndarray,
@@ -46,7 +52,10 @@ def _assignment_error(
     """Return an accurately accumulated absolute timestamp error."""
 
     return math.fsum(
-        abs(float(predictions[prediction_index] - requests[request_index]))
+        _timestamp_gap_s(
+            predictions[prediction_index],
+            requests[request_index],
+        )
         for request_index, prediction_index in assignment.items()
     )
 
@@ -179,8 +188,9 @@ def optimal_timestamp_assignment(
     for request_rank, request_time in enumerate(sorted_requests):
         # Widen the binary-search window by one representable value. Rounded
         # subtraction/addition can otherwise exclude an exact boundary match.
-        lower = np.nextafter(request_time - tolerance, -np.inf)
-        upper = np.nextafter(request_time + tolerance, np.inf)
+        request_value = float(request_time)
+        lower = math.nextafter(request_value - tolerance, -math.inf)
+        upper = math.nextafter(request_value + tolerance, math.inf)
         left = int(np.searchsorted(sorted_predictions, lower, side="left"))
         right = int(np.searchsorted(sorted_predictions, upper, side="right"))
         # The final gap subtraction can round a value outside these arithmetic
@@ -188,16 +198,21 @@ def optimal_timestamp_assignment(
         # actual matching predicate before constructing the sparse graph.
         while (
             left > 0
-            and abs(float(sorted_predictions[left - 1] - request_time)) <= tolerance
+            and _timestamp_gap_s(sorted_predictions[left - 1], request_value)
+            <= tolerance
         ):
             left -= 1
         while (
             right < prediction_count
-            and abs(float(sorted_predictions[right] - request_time)) <= tolerance
+            and _timestamp_gap_s(sorted_predictions[right], request_value)
+            <= tolerance
         ):
             right += 1
         for prediction_rank in range(left, right):
-            gap = abs(float(sorted_predictions[prediction_rank] - request_time))
+            gap = _timestamp_gap_s(
+                sorted_predictions[prediction_rank],
+                request_value,
+            )
             # The widened window can include a value just outside the tolerance,
             # so enforce the actual matching predicate explicitly.
             if gap > tolerance:
