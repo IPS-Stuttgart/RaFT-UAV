@@ -6,9 +6,6 @@ from . import (
 )
 from . import _diagnostics_sequence_scope_patch as _diagnostics_sequence_scope_patch
 from . import (
-    _fifth_wave_bootstrap_capture as _fifth_wave_bootstrap_capture,
-)
-from . import (
     _fifth_wave_error_stability_patch as _fifth_wave_error_stability_patch,
 )
 from . import (
