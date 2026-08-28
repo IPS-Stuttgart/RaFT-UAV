@@ -1,0 +1,121 @@
+---
+name: Materialize temporal formation stack
+
+"on":
+  push:
+    branches:
+      - agent/lts-temporal-formation-metric-stack
+    paths:
+      - ".materialize/**"
+      - ".github/workflows/materialize-lts-temporal-formation.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-lts-temporal-formation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Verify and materialize the tested payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .materialize/part-* | base64 -d > /tmp/temporal-formation-payload.tar.gz
+          echo "4abb09f36370ee93e1d60e3c318e7fdbf018185903f10c212facdb895730c1b7  /tmp/temporal-formation-payload.tar.gz" | sha256sum -c -
+          tar -tzf /tmp/temporal-formation-payload.tar.gz > /tmp/payload-manifest.txt
+          python - <<'PY'
+          from pathlib import Path
+
+          expected = {
+              ".github/workflows/multi-uav-lts-temporal-formation-evidence.yml",
+              "configs/multi_uav_lts_temporal_formation.json",
+              "docs/multi_uav_lts_temporal_formation_metric_stack.md",
+              "scripts/run_multi_uav_lts_temporal_formation_evidence.py",
+              "src/raft_uav/multi_uav_lts/adaptive_kinematic.py",
+              "src/raft_uav/multi_uav_lts/formation_reassociation.py",
+              "src/raft_uav/multi_uav_lts/learned_motion_prior.py",
+              "src/raft_uav/multi_uav_lts/metric_aware_boxes.py",
+              "src/raft_uav/multi_uav_lts/registered_temporal_proposals.py",
+              "src/raft_uav/multi_uav_lts/scene_stabilization.py",
+              "src/raft_uav/multi_uav_lts/seeded_multiscan.py",
+              "src/raft_uav/multi_uav_lts/temporal_p2_detector.py",
+              "tests/test_multi_uav_lts_adaptive_kinematic.py",
+              "tests/test_multi_uav_lts_formation_reassociation.py",
+              "tests/test_multi_uav_lts_learned_motion_prior.py",
+              "tests/test_multi_uav_lts_metric_aware_boxes.py",
+              "tests/test_multi_uav_lts_registered_temporal_proposals.py",
+              "tests/test_multi_uav_lts_scene_stabilization.py",
+              "tests/test_multi_uav_lts_seeded_multiscan_geometry.py",
+              "tests/test_multi_uav_lts_temporal_p2_detector.py",
+          }
+          observed = {
+              line.strip().removeprefix("./")
+              for line in Path("/tmp/payload-manifest.txt").read_text(encoding="utf-8").splitlines()
+              if line.strip() and not line.strip().endswith("/")
+          }
+          if observed != expected:
+              raise SystemExit(
+                  f"payload manifest mismatch: missing={sorted(expected-observed)} "
+                  f"unexpected={sorted(observed-expected)}"
+              )
+          PY
+          tar -xzf /tmp/temporal-formation-payload.tar.gz
+          rm -rf .materialize
+          rm -f .github/workflows/materialize-lts-temporal-formation.yml
+      - name: Validate the materialized source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev]"
+          python -m pytest -q \
+            tests/test_multi_uav_lts_scene_stabilization.py \
+            tests/test_multi_uav_lts_registered_temporal_proposals.py \
+            tests/test_multi_uav_lts_temporal_p2_detector.py \
+            tests/test_multi_uav_lts_learned_motion_prior.py \
+            tests/test_multi_uav_lts_seeded_multiscan.py \
+            tests/test_multi_uav_lts_seeded_multiscan_geometry.py \
+            tests/test_multi_uav_lts_formation_reassociation.py \
+            tests/test_multi_uav_lts_metric_aware_boxes.py \
+            tests/test_multi_uav_lts_adaptive_kinematic.py
+          python -m py_compile scripts/run_multi_uav_lts_temporal_formation_evidence.py
+          python -m ruff check \
+            scripts/run_multi_uav_lts_temporal_formation_evidence.py \
+            src/raft_uav/multi_uav_lts/adaptive_kinematic.py \
+            src/raft_uav/multi_uav_lts/formation_reassociation.py \
+            src/raft_uav/multi_uav_lts/learned_motion_prior.py \
+            src/raft_uav/multi_uav_lts/metric_aware_boxes.py \
+            src/raft_uav/multi_uav_lts/registered_temporal_proposals.py \
+            src/raft_uav/multi_uav_lts/scene_stabilization.py \
+            src/raft_uav/multi_uav_lts/seeded_multiscan.py \
+            src/raft_uav/multi_uav_lts/temporal_p2_detector.py \
+            tests/test_multi_uav_lts_scene_stabilization.py \
+            tests/test_multi_uav_lts_registered_temporal_proposals.py \
+            tests/test_multi_uav_lts_temporal_p2_detector.py \
+            tests/test_multi_uav_lts_learned_motion_prior.py \
+            tests/test_multi_uav_lts_seeded_multiscan_geometry.py \
+            tests/test_multi_uav_lts_formation_reassociation.py \
+            tests/test_multi_uav_lts_metric_aware_boxes.py \
+            tests/test_multi_uav_lts_adaptive_kinematic.py
+          git diff --check
+      - name: Commit the verified tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add temporal stabilization, formation and metric-aware LTS stack"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
