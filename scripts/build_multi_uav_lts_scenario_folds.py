@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build deterministic scenario-prefix folds balanced by frame count."""
 from __future__ import annotations
-import argparse, csv, re
+import argparse
+import csv
+import re
 from collections import defaultdict
 from pathlib import Path
 
