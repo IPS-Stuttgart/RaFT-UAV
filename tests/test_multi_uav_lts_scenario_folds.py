@@ -1,4 +1,6 @@
-import csv, subprocess, sys
+import csv
+import subprocess
+import sys
 from pathlib import Path
 from PIL import Image
 
