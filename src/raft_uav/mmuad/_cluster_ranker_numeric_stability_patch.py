@@ -38,17 +38,22 @@ def _scaled_population_std(values: np.ndarray, mean: float) -> float:
         return 0.0
     if not math.isfinite(scale):
         return float("inf")
-    normalized_variance = math.fsum((value / scale) ** 2 for value in deviations) / len(values)
+    normalized_variance = math.fsum(
+        (value / scale) ** 2 for value in deviations
+    ) / len(values)
+    normalized_variance = min(1.0, max(0.0, normalized_variance))
     return scale * math.sqrt(normalized_variance)
 
 
-def _stable_standardize_training_matrix(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _stable_standardize_training_matrix(
+    matrix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Match the legacy transform while repairing overflowed column statistics."""
 
     values = np.asarray(matrix, dtype=float)
     finite_mask = np.isfinite(values)
     counts = finite_mask.sum(axis=0)
-    with np.errstate(over="ignore", invalid="ignore"):
+    with np.errstate(all="ignore"):
         means = np.divide(
             np.where(finite_mask, values, 0.0).sum(axis=0),
             counts,
@@ -57,7 +62,9 @@ def _stable_standardize_training_matrix(matrix: np.ndarray) -> tuple[np.ndarray,
         )
         filled = np.where(finite_mask, values, means)
         raw_scales = np.nanstd(filled, axis=0)
-    bad_columns = (counts > 0) & (~np.isfinite(means) | ~np.isfinite(raw_scales))
+    bad_columns = (counts > 0) & (
+        ~np.isfinite(means) | ~np.isfinite(raw_scales)
+    )
     if bool(bad_columns.any()):
         means = means.copy()
         filled = filled.copy()
@@ -66,8 +73,15 @@ def _stable_standardize_training_matrix(matrix: np.ndarray) -> tuple[np.ndarray,
             finite_values = values[finite_mask[:, column], column]
             mean = _scaled_mean(finite_values)
             means[column] = mean
-            filled[:, column] = np.where(finite_mask[:, column], values[:, column], mean)
-            raw_scales[column] = _scaled_population_std(filled[:, column], mean)
+            filled[:, column] = np.where(
+                finite_mask[:, column],
+                values[:, column],
+                mean,
+            )
+            raw_scales[column] = _scaled_population_std(
+                filled[:, column],
+                mean,
+            )
     scales = np.where(
         np.isfinite(raw_scales) & (raw_scales > 1.0e-9),
         raw_scales,
@@ -100,11 +114,25 @@ def _repair_truth_distances(
         return labeled
     truth_by_sequence = {
         str(sequence_id): group.sort_values("time_s").reset_index(drop=True)
-        for sequence_id, group in authoritative.groupby("sequence_id", sort=True)
+        for sequence_id, group in authoritative.groupby(
+            "sequence_id",
+            sort=True,
+        )
     }
-    matched = labeled["truth_matched"].fillna(False).astype(bool).to_numpy()
-    legacy_3d = pd.to_numeric(labeled["truth_distance_3d_m"], errors="coerce").to_numpy(float)
-    legacy_2d = pd.to_numeric(labeled["truth_distance_2d_m"], errors="coerce").to_numpy(float)
+    matched = (
+        labeled["truth_matched"]
+        .fillna(False)
+        .astype(bool)
+        .to_numpy()
+    )
+    legacy_3d = pd.to_numeric(
+        labeled["truth_distance_3d_m"],
+        errors="coerce",
+    ).to_numpy(float)
+    legacy_2d = pd.to_numeric(
+        labeled["truth_distance_2d_m"],
+        errors="coerce",
+    ).to_numpy(float)
     feature_rows = pd.DataFrame(features)
     time_gate = float(max_truth_time_delta_s)
     distance_gate = float(good_threshold_m)
@@ -123,10 +151,14 @@ def _repair_truth_distances(
             continue
         try:
             row_time = float(row["time_s"])
-            truth_times = [float(value) for value in seq_truth["time_s"].tolist()]
+            truth_times = [
+                float(value) for value in seq_truth["time_s"].tolist()
+            ]
         except (TypeError, ValueError):
             continue
-        if not math.isfinite(row_time) or not all(math.isfinite(value) for value in truth_times):
+        if not math.isfinite(row_time):
+            continue
+        if not all(math.isfinite(value) for value in truth_times):
             continue
         truth_position = min(
             range(len(truth_times)),
@@ -147,20 +179,31 @@ def _repair_truth_distances(
             continue
         stable_2d = math.hypot(residual[0], residual[1])
         stable_3d = math.hypot(*residual)
-        repair_2d = _needs_distance_repair(float(legacy_2d[position]), stable_2d)
-        repair_3d = _needs_distance_repair(float(legacy_3d[position]), stable_3d)
+        repair_2d = _needs_distance_repair(
+            float(legacy_2d[position]),
+            stable_2d,
+        )
+        repair_3d = _needs_distance_repair(
+            float(legacy_3d[position]),
+            stable_3d,
+        )
         if not (repair_2d or repair_3d):
             continue
         index = int(position)
         if repair_2d:
-            labeled.iloc[index, labeled.columns.get_loc("truth_distance_2d_m")] = stable_2d
+            column = labeled.columns.get_loc("truth_distance_2d_m")
+            labeled.iloc[index, column] = stable_2d
         if repair_3d:
-            labeled.iloc[index, labeled.columns.get_loc("truth_distance_3d_m")] = stable_3d
+            column = labeled.columns.get_loc("truth_distance_3d_m")
+            labeled.iloc[index, column] = stable_3d
             if "truth_vertical_error_m" in labeled.columns:
-                labeled.iloc[index, labeled.columns.get_loc("truth_vertical_error_m")] = abs(residual[2])
-            for column, threshold in thresholds.items():
-                if column in labeled.columns:
-                    labeled.iloc[index, labeled.columns.get_loc(column)] = stable_3d <= threshold
+                column = labeled.columns.get_loc("truth_vertical_error_m")
+                labeled.iloc[index, column] = abs(residual[2])
+            for column_name, threshold in thresholds.items():
+                if column_name not in labeled.columns:
+                    continue
+                column = labeled.columns.get_loc(column_name)
+                labeled.iloc[index, column] = stable_3d <= threshold
     return labeled
 
 
@@ -169,7 +212,8 @@ def install() -> None:
 
     from raft_uav.mmuad import cluster_ranker
 
-    previous_label: Callable[..., pd.DataFrame] = cluster_ranker.label_cluster_features_against_truth
+    previous_label: Callable[..., pd.DataFrame]
+    previous_label = cluster_ranker.label_cluster_features_against_truth
     if not getattr(previous_label, _LABEL_PATCH_MARKER, False):
 
         @wraps(previous_label)
@@ -180,7 +224,7 @@ def install() -> None:
             good_threshold_m: float = 5.0,
             max_truth_time_delta_s: float = 0.5,
         ) -> pd.DataFrame:
-            with np.errstate(over="ignore", invalid="ignore"):
+            with np.errstate(all="ignore"):
                 labeled = previous_label(
                     features,
                     truth,
@@ -196,10 +240,22 @@ def install() -> None:
                 max_truth_time_delta_s=max_truth_time_delta_s,
             )
 
-        setattr(stable_label_cluster_features_against_truth, _LABEL_PATCH_MARKER, True)
-        setattr(stable_label_cluster_features_against_truth, "_raft_uav_previous", previous_label)
-        cluster_ranker.label_cluster_features_against_truth = stable_label_cluster_features_against_truth
-        cluster_ranker._IMPL.label_cluster_features_against_truth = stable_label_cluster_features_against_truth
+        setattr(
+            stable_label_cluster_features_against_truth,
+            _LABEL_PATCH_MARKER,
+            True,
+        )
+        setattr(
+            stable_label_cluster_features_against_truth,
+            "_raft_uav_previous",
+            previous_label,
+        )
+        cluster_ranker.label_cluster_features_against_truth = (
+            stable_label_cluster_features_against_truth
+        )
+        cluster_ranker._IMPL.label_cluster_features_against_truth = (
+            stable_label_cluster_features_against_truth
+        )
 
     previous_standardize = cluster_ranker._standardize_training_matrix
     if not getattr(previous_standardize, _STANDARDIZE_PATCH_MARKER, False):
@@ -210,7 +266,19 @@ def install() -> None:
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             return _stable_standardize_training_matrix(matrix)
 
-        setattr(stable_standardize_training_matrix, _STANDARDIZE_PATCH_MARKER, True)
-        setattr(stable_standardize_training_matrix, "_raft_uav_previous", previous_standardize)
-        cluster_ranker._standardize_training_matrix = stable_standardize_training_matrix
-        cluster_ranker._IMPL._standardize_training_matrix = stable_standardize_training_matrix
+        setattr(
+            stable_standardize_training_matrix,
+            _STANDARDIZE_PATCH_MARKER,
+            True,
+        )
+        setattr(
+            stable_standardize_training_matrix,
+            "_raft_uav_previous",
+            previous_standardize,
+        )
+        cluster_ranker._standardize_training_matrix = (
+            stable_standardize_training_matrix
+        )
+        cluster_ranker._IMPL._standardize_training_matrix = (
+            stable_standardize_training_matrix
+        )
