@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 torch = pytest.importorskip('torch')
-from raft_uav.multi_uav_lts.tiny_p2_detector import TinyP2Detector, _tensor_loss, size_adaptive_nwd_loss_np
+from raft_uav.multi_uav_lts.tiny_p2_detector import (  # noqa: E402
+    TinyP2Detector,
+    _tensor_loss,
+    size_adaptive_nwd_loss_np,
+)
 
 def test_tiny_boxes_receive_more_nwd_weight():
     pred = np.array([[12.0, 12.0, 12.0, 12.0], [12.0, 12.0, 48.0, 48.0]])
