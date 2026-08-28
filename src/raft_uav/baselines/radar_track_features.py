@@ -12,6 +12,19 @@ _TRACK_SORT_COLUMNS = ("time_s", "frame_index", "track_index")
 _SEQUENCE_SCOPE_COLUMNS = ("sequence_id", "flight_id")
 
 
+def _row_norms(values: np.ndarray) -> np.ndarray:
+    """Return row-wise Euclidean norms without losing representable finite values."""
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        norms = np.linalg.norm(values, axis=1)
+    repair = np.isfinite(values).all(axis=1) & ~np.isfinite(norms)
+    if np.any(repair):
+        norms = norms.copy()
+        with np.errstate(over="ignore", invalid="ignore"):
+            norms[repair] = np.hypot.reduce(values[repair], axis=1)
+    return norms
+
+
 def _sort_track_rows(rows: pd.DataFrame) -> pd.DataFrame:
     """Return rows in stable numeric chronology without changing their labels."""
 
@@ -181,7 +194,7 @@ def _position_step(group: pd.DataFrame) -> np.ndarray:
         errors="coerce",
     ).to_numpy(dtype=float)
     diffs = np.diff(positions, axis=0)
-    steps = np.r_[0.0, np.linalg.norm(diffs, axis=1)]
+    steps = np.r_[0.0, _row_norms(diffs)]
     return np.where(np.isfinite(steps), steps, np.nan)
 
 
@@ -205,7 +218,7 @@ def _range_rate(group: pd.DataFrame) -> np.ndarray:
             pd.to_numeric,
             errors="coerce",
         ).to_numpy(dtype=float)
-        ranges = np.linalg.norm(positions, axis=1)
+        ranges = _row_norms(positions)
     else:
         return np.full(len(group), np.nan)
     times = pd.to_numeric(
@@ -238,7 +251,7 @@ def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarr
         ]
     )
     diffs = np.r_[np.full((1, 3), np.nan), np.diff(velocity, axis=0)]
-    norms = np.linalg.norm(diffs, axis=1)
+    norms = _row_norms(diffs)
     smoothness = (
         pd.Series(norms)
         .rolling(window_frames, min_periods=1)
