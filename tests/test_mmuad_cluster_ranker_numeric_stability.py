@@ -9,6 +9,7 @@ import pytest
 from raft_uav.mmuad.cluster_ranker import (
     _standardize_training_matrix,
     label_cluster_features_against_truth,
+    predict_cluster_scores,
     train_cluster_ranker,
 )
 
@@ -91,6 +92,25 @@ def test_cluster_ranker_standardization_keeps_large_finite_scale() -> None:
     assert scales[1] == 1.0
 
 
+def test_cluster_ranker_standardization_handles_asymmetric_finite_extremes() -> None:
+    matrix = np.array(
+        [
+            [1.7e308],
+            [1.7e308],
+            [-1.7e308],
+        ]
+    )
+
+    with np.errstate(all="raise"):
+        filled, means, scales = _standardize_training_matrix(matrix)
+
+    assert np.isfinite(filled).all()
+    assert np.isfinite(means).all()
+    assert np.isfinite(scales).all()
+    assert means[0] / 1.7e308 == pytest.approx(1.0 / 3.0)
+    assert scales[0] / 1.7e308 == pytest.approx(math.sqrt(8.0 / 9.0))
+
+
 def test_cluster_ranker_training_handles_large_finite_feature_values() -> None:
     features = pd.DataFrame(
         {
@@ -111,3 +131,30 @@ def test_cluster_ranker_training_handles_large_finite_feature_values() -> None:
     assert all(math.isfinite(value) for value in model.feature_scales)
     assert all(math.isfinite(value) for value in model.weights)
     assert math.isfinite(model.bias)
+
+
+def test_cluster_ranker_train_predict_handles_asymmetric_finite_extremes() -> None:
+    features = pd.DataFrame(
+        {
+            "source": ["lidar_360", "lidar_360", "lidar_360"],
+            "x_m": [1.7e308, 1.7e308, -1.7e308],
+            "good_cluster": [True, False, False],
+        }
+    )
+
+    with np.errstate(all="raise"):
+        model = train_cluster_ranker(
+            features,
+            iterations=5,
+            learning_rate=0.1,
+        )
+        scores = predict_cluster_scores(features, model)
+
+    x_index = model.feature_columns.index("x_m")
+    assert model.feature_means[x_index] / 1.7e308 == pytest.approx(1.0 / 3.0)
+    assert model.feature_scales[x_index] / 1.7e308 == pytest.approx(
+        math.sqrt(8.0 / 9.0)
+    )
+    assert all(math.isfinite(value) for value in model.weights)
+    assert math.isfinite(model.bias)
+    assert np.isfinite(scores).all()
