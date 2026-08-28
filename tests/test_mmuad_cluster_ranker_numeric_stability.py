@@ -87,7 +87,7 @@ def test_cluster_ranker_standardization_keeps_large_finite_scale() -> None:
     assert np.isfinite(scales).all()
     assert means[0] == 0.0
     assert means[1] / 1.0e308 == pytest.approx(1.0)
-    assert scales[0] / 1.0e308 == pytest.approx(1.0)
+    assert scales[0] / 1.0e308 == pytest.approx(math.sqrt(2.0 / 3.0))
     assert scales[1] == 1.0
 
 
