@@ -34,3 +34,16 @@ def test_tracklet_features_preserve_fractional_ids_without_collision() -> None:
 
     assert features["track_id"].tolist() == [1.25, 1.75]
     assert features["frames"].tolist() == [2, 2]
+
+
+def test_tracklet_features_preserve_ids_through_flight_scope() -> None:
+    radar = _two_track_radar(["001", "001", "uav-A", "uav-A"])
+    radar["flight_id"] = ["flight-a", "flight-a", "flight-b", "flight-b"]
+
+    features = tracklet_feature_frame(radar)
+
+    assert features[["flight_id", "track_id"]].values.tolist() == [
+        ["flight-a", "001"],
+        ["flight-b", "uav-A"],
+    ]
+    assert features["frames"].tolist() == [2, 2]
