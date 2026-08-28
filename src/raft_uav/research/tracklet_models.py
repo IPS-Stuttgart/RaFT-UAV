@@ -14,6 +14,22 @@ from scipy.optimize import minimize
 PositionColumns = ("east_m", "north_m", "up_m")
 
 
+def _euclidean_norm(values: np.ndarray, *, axis: int) -> np.ndarray:
+    """Return Euclidean norms without losing representable finite values."""
+
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore"):
+        norms = np.linalg.norm(array, axis=axis)
+    repair = np.isfinite(array).all(axis=axis) & ~np.isfinite(norms)
+    if np.any(repair):
+        norms = np.asarray(norms).copy()
+        moved = np.moveaxis(array, axis, -1)
+        with np.errstate(over="ignore", invalid="ignore"):
+            stable = np.hypot.reduce(moved, axis=-1)
+        norms[repair] = stable[repair]
+    return norms
+
+
 @dataclass(frozen=True)
 class StandardizedLogisticModel:
     """Small standardized logistic model for tracklets or calibrated priors."""
@@ -121,7 +137,9 @@ def frame_context_features(candidates: pd.DataFrame) -> pd.DataFrame:
     candidate_count = len(out)
     out["frame_candidate_count"] = int(candidate_count)
     if candidate_count > 1:
-        distances = np.linalg.norm(positions[:, None, :] - positions[None, :, :], axis=2)
+        with np.errstate(over="ignore", invalid="ignore"):
+            position_deltas = positions[:, None, :] - positions[None, :, :]
+        distances = _euclidean_norm(position_deltas, axis=2)
         np.fill_diagonal(distances, np.nan)
         out["nearest_neighbor_distance_m"] = np.nanmin(distances, axis=1)
         out["mean_neighbor_distance_m"] = np.nanmean(distances, axis=1)
@@ -219,14 +237,19 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
     times = pd.to_numeric(segment["time_s"], errors="coerce").to_numpy(dtype=float)
     positions = segment.loc[:, PositionColumns].to_numpy(dtype=float)
     dt = np.diff(times)
-    displacement = np.linalg.norm(np.diff(positions, axis=0), axis=1) if len(segment) > 1 else np.empty(0)
+    if len(segment) > 1:
+        with np.errstate(over="ignore", invalid="ignore"):
+            position_deltas = np.diff(positions, axis=0)
+        displacement = _euclidean_norm(position_deltas, axis=1)
+    else:
+        displacement = np.empty(0)
     speeds = np.divide(displacement, dt, out=np.zeros_like(displacement), where=dt > 1e-9)
     catprob = (
         pd.to_numeric(segment["cat_prob_uav"], errors="coerce").to_numpy(dtype=float)
         if "cat_prob_uav" in segment.columns
         else np.ones(len(segment), dtype=float)
     )
-    ranges = np.linalg.norm(positions, axis=1)
+    ranges = _euclidean_norm(positions, axis=1)
     return {
         "track_id": track_id,
         "segment_index": segment_index,
