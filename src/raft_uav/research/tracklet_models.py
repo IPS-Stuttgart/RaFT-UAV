@@ -107,7 +107,7 @@ def tracklet_feature_frame(
             segment = ordered.iloc[int(start) : int(end)].copy()
             if segment.empty:
                 continue
-            rows.append(_tracklet_features(segment, int(track_id), int(segment_index)))
+            rows.append(_tracklet_features(segment, track_id, int(segment_index)))
     return pd.DataFrame.from_records(rows)
 
 
@@ -215,7 +215,7 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
     return out
 
 
-def _tracklet_features(segment: pd.DataFrame, track_id: int, segment_index: int) -> dict[str, object]:
+def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: int) -> dict[str, object]:
     times = pd.to_numeric(segment["time_s"], errors="coerce").to_numpy(dtype=float)
     positions = segment.loc[:, PositionColumns].to_numpy(dtype=float)
     dt = np.diff(times)
