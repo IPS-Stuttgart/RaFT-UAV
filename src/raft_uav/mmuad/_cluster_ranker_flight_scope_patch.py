@@ -179,7 +179,11 @@ def _scoped_frame_selection_rows(
 
 
 def install() -> None:
-    """Install flight-scoped truth labeling and frame diagnostics."""
+    """Install numeric stability, flight-scoped truth labeling, and diagnostics."""
+
+    from raft_uav.mmuad import _cluster_ranker_numeric_stability_patch as numeric_stability
+
+    numeric_stability.install()
 
     from raft_uav.mmuad import cluster_ranker
 
