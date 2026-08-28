@@ -310,12 +310,13 @@ def _run_sequence_filter(
             predicted = filt.state[:3].copy()
             innovation = z - predicted
             if config.soft_anchor_gate_m > 0 and (
-                float(np.linalg.norm(innovation)) > config.soft_anchor_gate_m
+                float(_overflow_stable_norm(innovation, axis=0))
+                > config.soft_anchor_gate_m
             ):
                 action = "soft_anchor_gated"
             else:
                 action = "soft_anchor"
-                horizontal_norm = float(np.linalg.norm(innovation[:2]))
+                horizontal_norm = float(_overflow_stable_norm(innovation[:2], axis=0))
                 if horizontal_norm > config.soft_anchor_cap_m > 0:
                     innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
                 capped_z = predicted + innovation
@@ -367,6 +368,13 @@ def _overflow_stable_norm(values: np.ndarray, *, axis: int) -> np.ndarray:
         norms = np.asarray(np.linalg.norm(array, axis=axis), dtype=float)
     finite_inputs = np.isfinite(array).all(axis=axis)
     repair = finite_inputs & ~np.isfinite(norms)
+    if np.ndim(norms) == 0:
+        if bool(repair):
+            return np.asarray(
+                np.hypot.reduce(np.abs(array), axis=axis),
+                dtype=float,
+            )
+        return norms
     if bool(np.any(repair)):
         norms = norms.copy()
         norms[repair] = np.hypot.reduce(np.abs(array[repair]), axis=axis)
