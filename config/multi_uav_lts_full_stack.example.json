@@ -1,0 +1,9 @@
+{
+  "p2": {"epochs": 20, "score_threshold": 0.003, "top_k": 500},
+  "track_conditioned": {"history": 5, "sigma_scale": 3.0, "box_scale": 3.0, "upscale": 3.0},
+  "temporal_roi": {"radius": 2, "robust_z": 3.5, "centre_gate": 0.65},
+  "imm": {"process_noise": 2.0, "measurement_noise": 4.0, "student_df": 5.0},
+  "multiscan": {"max_gap": 12, "dual_iterations": 16, "min_birth_hits": 5, "affinity_weight": 0.12},
+  "expert_gate": {"margin": 0.0005, "confidence_multiplier": 1.645},
+  "selection": {"bootstrap_samples": 5000, "raw_fallback": true}
+}
