@@ -139,8 +139,13 @@ def _install_summary_frame_count_patch() -> None:
 
 
 def install() -> None:
-    """Install strict config validation and schema-light summary frame counting."""
+    """Install strict config validation and candidate-reservoir safety guards."""
 
+    from raft_uav.mmuad._candidate_reservoir_numeric_stability_patch import (
+        install as install_numeric_stability,
+    )
+
+    install_numeric_stability()
     _install_summary_frame_count_patch()
 
     from raft_uav.mmuad import candidate_reservoir_apply as apply_module
