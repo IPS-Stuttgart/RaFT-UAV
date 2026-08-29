@@ -118,7 +118,13 @@ def tracklet_feature_frame(
             kind="mergesort",
         ).reset_index(drop=True)
         values = pd.to_numeric(ordered[group_key], errors="coerce").to_numpy(dtype=float)
-        split_indices = np.r_[0, np.where(np.diff(values) > float(max_frame_gap))[0] + 1, len(ordered)]
+        with np.errstate(over="ignore", invalid="ignore"):
+            value_deltas = np.diff(values)
+        split_indices = np.r_[
+            0,
+            np.where(value_deltas > float(max_frame_gap))[0] + 1,
+            len(ordered),
+        ]
         for segment_index, (start, end) in enumerate(zip(split_indices[:-1], split_indices[1:])):
             segment = ordered.iloc[int(start) : int(end)].copy()
             if segment.empty:
@@ -236,7 +242,8 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
 def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: int) -> dict[str, object]:
     times = pd.to_numeric(segment["time_s"], errors="coerce").to_numpy(dtype=float)
     positions = segment.loc[:, PositionColumns].to_numpy(dtype=float)
-    dt = np.diff(times)
+    with np.errstate(over="ignore", invalid="ignore"):
+        dt = np.diff(times)
     if len(segment) > 1:
         with np.errstate(over="ignore", invalid="ignore"):
             position_deltas = np.diff(positions, axis=0)
@@ -257,12 +264,18 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
         else np.ones(len(segment), dtype=float)
     )
     ranges = _euclidean_norm(positions, axis=1)
+    start_time_s = float(np.nanmin(times))
+    end_time_s = float(np.nanmax(times))
+    with np.errstate(over="ignore", invalid="ignore"):
+        duration_s = end_time_s - start_time_s
+    if not np.isfinite(duration_s):
+        duration_s = np.nan
     return {
         "track_id": track_id,
         "segment_index": segment_index,
-        "start_time_s": float(np.nanmin(times)),
-        "end_time_s": float(np.nanmax(times)),
-        "duration_s": float(np.nanmax(times) - np.nanmin(times)) if times.size else 0.0,
+        "start_time_s": start_time_s,
+        "end_time_s": end_time_s,
+        "duration_s": duration_s,
         "frames": int(len(segment)),
         "mean_cat_prob_uav": float(np.nanmean(catprob)),
         "min_cat_prob_uav": float(np.nanmin(catprob)),
