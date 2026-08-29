@@ -97,6 +97,16 @@ def write_track5_speed_limit_outputs(
 ) -> dict[str, Path]:
     """Write speed-limited estimates, official CSV/ZIP, diagnostics, and manifest."""
 
+    if require_leaderboard_ready and template is None:
+        raise ValueError("require_leaderboard_ready=True requires a template")
+    # Validate before creating or overwriting artifacts, and do not mutate callers.
+    diagnostics = diagnostics.copy()
+    changed = _speed_limit_applied_flags(
+        diagnostics.get("speed_limit_applied", pd.Series(dtype=bool))
+    )
+    if "speed_limit_applied" in diagnostics:
+        diagnostics["speed_limit_applied"] = changed
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -138,7 +148,6 @@ def write_track5_speed_limit_outputs(
             raise SystemExit(
                 f"speed-limited submission is not leaderboard-ready: {reasons or 'unknown'}"
             )
-    changed = diagnostics.get("speed_limit_applied", pd.Series(dtype=bool)).astype(bool)
     applied = pd.to_numeric(diagnostics.get("speed_limit_correction_m", pd.Series(dtype=float)), errors="coerce")
     payload = dict(manifest or {})
     payload.update(
@@ -159,6 +168,32 @@ def write_track5_speed_limit_outputs(
     return paths
 
 
+def _speed_limit_applied_flags(values: pd.Series) -> pd.Series:
+    """Parse persisted flags; missing values mean no recorded correction.
+
+    Match temporal-repair diagnostics: accept Boolean text, exact numeric 0/1,
+    and missing values, but reject malformed data rather than using truthiness.
+    """
+
+    text = values.astype("string").str.strip().str.casefold()
+    true = text.isin({"true", "t", "yes", "y", "on"})
+    false = text.isna() | text.isin(
+        {"", "false", "f", "no", "n", "off", "none", "null", "nan", "na", "n/a", "<na>", "nat"}
+    )
+    numeric = pd.to_numeric(text, errors="coerce")
+    true = true | numeric.eq(1.0).fillna(False)
+    false = false | numeric.eq(0.0).fillna(False)
+    invalid = ~(true | false)
+    if invalid.any():
+        bad = values.loc[invalid]
+        raise ValueError(
+            "speed_limit_applied contains invalid Boolean values at rows "
+            f"{bad.index[:5].tolist()}: {bad.iloc[:5].tolist()}; expected booleans, "
+            "exact numeric 0/1, recognized Boolean text, or missing values"
+        )
+    return true.astype(bool)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raft-uav-mmuad-track5-speed-limit",
@@ -172,7 +207,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--anchor-blend", type=float, default=0.0)
     parser.add_argument("--require-leaderboard-ready", action="store_true")
     args = parser.parse_args(argv)
-
     if args.require_leaderboard_ready and args.template is None:
         raise SystemExit("--require-leaderboard-ready requires --template")
     submission = _load_speed_limit_submission(args.submission)
