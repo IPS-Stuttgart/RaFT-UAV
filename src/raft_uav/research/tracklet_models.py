@@ -32,6 +32,21 @@ def _euclidean_norm(values: np.ndarray, *, axis: int) -> np.ndarray:
     return norms
 
 
+def _stable_nanmean(values: np.ndarray) -> float:
+    """Return a NaN-skipping mean without overflowing a finite reduction."""
+
+    array = np.asarray(values, dtype=float).reshape(-1)
+    valid = array[~np.isnan(array)]
+    if valid.size == 0:
+        return np.nan
+    scale = float(np.max(np.abs(valid)))
+    if scale == 0.0 or not np.isfinite(scale):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return float(np.mean(valid))
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        return float(np.mean(valid / scale) * scale)
+
+
 @dataclass(frozen=True)
 class StandardizedLogisticModel:
     """Small standardized logistic model for tracklets or calibrated priors."""
@@ -150,7 +165,10 @@ def frame_context_features(candidates: pd.DataFrame) -> pd.DataFrame:
         distances = _euclidean_norm(position_deltas, axis=2)
         np.fill_diagonal(distances, np.nan)
         out["nearest_neighbor_distance_m"] = np.nanmin(distances, axis=1)
-        out["mean_neighbor_distance_m"] = np.nanmean(distances, axis=1)
+        out["mean_neighbor_distance_m"] = np.asarray(
+            [_stable_nanmean(row) for row in distances],
+            dtype=float,
+        )
     else:
         out["nearest_neighbor_distance_m"] = np.nan
         out["mean_neighbor_distance_m"] = np.nan
@@ -294,7 +312,7 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
         "min_cat_prob_uav": float(np.nanmin(catprob)),
         "std_cat_prob_uav": float(np.nanstd(catprob)),
         "mean_speed_mps": (
-            float(np.mean(finite_speeds))
+            _stable_nanmean(finite_speeds)
             if finite_speeds.size
             else (0.0 if speeds.size == 0 else np.nan)
         ),
@@ -303,7 +321,7 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
             if finite_speeds.size
             else (0.0 if speeds.size == 0 else np.nan)
         ),
-        "mean_range_m": float(np.nanmean(ranges)),
+        "mean_range_m": _stable_nanmean(ranges),
         "range_span_m": float(np.nanmax(ranges) - np.nanmin(ranges)),
         "start_east_m": float(positions[0, 0]),
         "start_north_m": float(positions[0, 1]),
