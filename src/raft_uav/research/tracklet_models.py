@@ -243,7 +243,14 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
         displacement = _euclidean_norm(position_deltas, axis=1)
     else:
         displacement = np.empty(0)
-    speeds = np.divide(displacement, dt, out=np.zeros_like(displacement), where=dt > 1e-9)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        speeds = np.divide(
+            displacement,
+            dt,
+            out=np.full_like(displacement, np.nan, dtype=float),
+            where=np.isfinite(dt) & (dt > 1e-9),
+        )
+    finite_speeds = speeds[np.isfinite(speeds)]
     catprob = (
         pd.to_numeric(segment["cat_prob_uav"], errors="coerce").to_numpy(dtype=float)
         if "cat_prob_uav" in segment.columns
@@ -260,8 +267,16 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
         "mean_cat_prob_uav": float(np.nanmean(catprob)),
         "min_cat_prob_uav": float(np.nanmin(catprob)),
         "std_cat_prob_uav": float(np.nanstd(catprob)),
-        "mean_speed_mps": float(np.nanmean(speeds)) if speeds.size else 0.0,
-        "max_speed_mps": float(np.nanmax(speeds)) if speeds.size else 0.0,
+        "mean_speed_mps": (
+            float(np.mean(finite_speeds))
+            if finite_speeds.size
+            else (0.0 if speeds.size == 0 else np.nan)
+        ),
+        "max_speed_mps": (
+            float(np.max(finite_speeds))
+            if finite_speeds.size
+            else (0.0 if speeds.size == 0 else np.nan)
+        ),
         "mean_range_m": float(np.nanmean(ranges)),
         "range_span_m": float(np.nanmax(ranges) - np.nanmin(ranges)),
         "start_east_m": float(positions[0, 0]),
