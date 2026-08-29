@@ -78,3 +78,50 @@ def test_track_features_ignore_nonfinite_time_intervals() -> None:
         np.array([np.nan, np.nan]),
         equal_nan=True,
     )
+
+
+def test_track_features_ignore_finite_difference_overflow() -> None:
+    magnitude = 1.0e308
+    radar = pd.DataFrame(
+        {
+            "time_s": [-magnitude, magnitude],
+            "frame_index": [-magnitude, magnitude],
+            "track_id": [7, 7],
+            "range_m": [1.0, 2.0],
+            "velocity_east_mps": [-magnitude, magnitude],
+            "velocity_north_mps": [0.0, 0.0],
+            "velocity_down_mps": [0.0, 0.0],
+        }
+    )
+
+    with np.errstate(all="raise"):
+        featured = add_track_level_features(radar, window_frames=2)
+
+    np.testing.assert_allclose(
+        featured["track_age_frames"].to_numpy(dtype=float),
+        np.array([0.0, 1.0]),
+    )
+    np.testing.assert_allclose(
+        featured["track_hit_streak_frames"].to_numpy(dtype=float),
+        np.array([1.0, 1.0]),
+    )
+    np.testing.assert_allclose(
+        featured["track_time_since_first_s"].to_numpy(dtype=float),
+        np.array([0.0, np.nan]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        featured["track_frame_gap"].to_numpy(dtype=float),
+        np.array([0.0, np.nan]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        featured["track_range_rate_mps"].to_numpy(dtype=float),
+        np.array([np.nan, np.nan]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        featured["track_velocity_smoothness_mps"].to_numpy(dtype=float),
+        np.array([np.nan, np.nan]),
+        equal_nan=True,
+    )
