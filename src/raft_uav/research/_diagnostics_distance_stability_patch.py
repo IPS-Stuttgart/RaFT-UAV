@@ -62,14 +62,19 @@ class _StableLinalgProxy:
             return direct
 
         normalized_axis = int(axis)
+        reduced_direct = (
+            np.squeeze(direct_array, axis=normalized_axis)
+            if keepdims
+            else direct_array
+        )
         finite_inputs = np.isfinite(array).all(axis=normalized_axis)
-        repair = finite_inputs & ~np.isfinite(direct_array)
+        repair = finite_inputs & ~np.isfinite(reduced_direct)
         if not bool(np.any(repair)):
             return direct
 
         with np.errstate(over="ignore", invalid="ignore"):
             stable = np.hypot.reduce(np.abs(array), axis=normalized_axis)
-        repaired = np.asarray(direct_array).copy()
+        repaired = np.asarray(reduced_direct).copy()
         repaired[repair] = np.asarray(stable)[repair]
         if keepdims:
             repaired = np.expand_dims(repaired, axis=normalized_axis)
