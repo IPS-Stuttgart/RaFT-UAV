@@ -53,6 +53,48 @@ def test_tracklet_features_ignore_zero_duration_steps_in_speed_summary() -> None
     np.testing.assert_allclose(features["max_speed_mps"], [2.0])
 
 
+def test_tracklet_features_treat_unrepresentable_duration_as_missing() -> None:
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7],
+            "frame_index": [0, 1],
+            "time_s": [-1.0e308, 1.0e308],
+            "east_m": [0.0, 2.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    with np.errstate(all="raise"):
+        features = tracklet_feature_frame(radar)
+
+    np.testing.assert_allclose(features["start_time_s"], [-1.0e308])
+    np.testing.assert_allclose(features["end_time_s"], [1.0e308])
+    assert np.isnan(features.loc[0, "duration_s"])
+    assert np.isnan(features.loc[0, "mean_speed_mps"])
+    assert np.isnan(features.loc[0, "max_speed_mps"])
+
+
+def test_tracklet_segmentation_handles_unrepresentable_time_gap() -> None:
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7],
+            "time_s": [-1.0e308, 1.0e308],
+            "east_m": [0.0, 2.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    with np.errstate(all="raise"):
+        features = tracklet_feature_frame(radar)
+
+    assert len(features) == 2
+    np.testing.assert_allclose(features["duration_s"], [0.0, 0.0])
+    np.testing.assert_allclose(features["mean_speed_mps"], [0.0, 0.0])
+    np.testing.assert_allclose(features["max_speed_mps"], [0.0, 0.0])
+
+
 def test_frame_context_keeps_representable_large_neighbor_distances_finite() -> None:
     magnitude = 1.0e308
     candidates = pd.DataFrame(
