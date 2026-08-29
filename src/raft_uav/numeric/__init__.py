@@ -55,6 +55,61 @@ def optional_int(value: object) -> int | None:
     return int(number)
 
 
+def stable_euclidean_rate(
+    current: np.ndarray,
+    previous: np.ndarray,
+    dt_s: float,
+) -> float:
+    """Return a representable finite Euclidean displacement rate when one exists."""
+
+    current_array = np.asarray(current, dtype=float)
+    previous_array = np.asarray(previous, dtype=float)
+    dt_s = float(dt_s)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        delta = current_array - previous_array
+        distance = float(np.linalg.norm(delta))
+        direct = float(distance / dt_s)
+    if np.isfinite(direct):
+        return direct
+    if not (
+        current_array.shape == previous_array.shape
+        and bool(np.isfinite(current_array).all())
+        and bool(np.isfinite(previous_array).all())
+        and np.isfinite(dt_s)
+        and dt_s > 0.0
+    ):
+        return np.nan
+
+    scale = float(max(np.max(np.abs(current_array)), np.max(np.abs(previous_array))))
+    if scale <= 0.0:
+        return 0.0
+    with np.errstate(over="ignore", invalid="ignore"):
+        scaled_delta = current_array / scale - previous_array / scale
+        scaled_distance = float(np.hypot.reduce(np.abs(scaled_delta).reshape(-1)))
+    repaired = _positive_product_ratio(scale, scaled_distance, dt_s)
+    return repaired if np.isfinite(repaired) else np.nan
+
+
+def _positive_product_ratio(
+    numerator_a: float,
+    numerator_b: float,
+    denominator: float,
+) -> float:
+    """Return ``a * b / denominator`` without overflowing intermediate products."""
+
+    if numerator_a == 0.0 or numerator_b == 0.0:
+        return 0.0
+    numerator_a_mantissa, numerator_a_exponent = math.frexp(float(numerator_a))
+    numerator_b_mantissa, numerator_b_exponent = math.frexp(float(numerator_b))
+    denominator_mantissa, denominator_exponent = math.frexp(float(denominator))
+    mantissa = (numerator_a_mantissa * numerator_b_mantissa) / denominator_mantissa
+    exponent = numerator_a_exponent + numerator_b_exponent - denominator_exponent
+    try:
+        return math.ldexp(mantissa, exponent)
+    except OverflowError:
+        return math.inf
+
+
 def _optional_decimal_int(value: Decimal) -> int | None:
     if not value.is_finite() or value != value.to_integral_value():
         return None

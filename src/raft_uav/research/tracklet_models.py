@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from raft_uav.numeric import stable_euclidean_rate
+
 PositionColumns = ("east_m", "north_m", "up_m")
 
 
@@ -243,12 +245,23 @@ def _tracklet_features(segment: pd.DataFrame, track_id: object, segment_index: i
         displacement = _euclidean_norm(position_deltas, axis=1)
     else:
         displacement = np.empty(0)
+    valid_speed_intervals = np.isfinite(dt) & (dt > 1e-9)
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         speeds = np.divide(
             displacement,
             dt,
             out=np.full_like(displacement, np.nan, dtype=float),
-            where=np.isfinite(dt) & (dt > 1e-9),
+            where=valid_speed_intervals,
+        )
+    finite_endpoints = np.isfinite(positions[:-1]).all(axis=1) & np.isfinite(
+        positions[1:]
+    ).all(axis=1)
+    repair = valid_speed_intervals & finite_endpoints & ~np.isfinite(speeds)
+    for interval_index in np.flatnonzero(repair):
+        speeds[interval_index] = stable_euclidean_rate(
+            positions[interval_index + 1],
+            positions[interval_index],
+            float(dt[interval_index]),
         )
     finite_speeds = speeds[np.isfinite(speeds)]
     catprob = (
