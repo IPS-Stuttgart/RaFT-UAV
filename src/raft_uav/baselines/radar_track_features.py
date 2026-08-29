@@ -136,11 +136,16 @@ def _track_age(group: pd.DataFrame) -> np.ndarray:
     for i in range(1, len(group)):
         previous = frame_index[i - 1]
         current = frame_index[i]
-        same_frame = (
-            np.isfinite(previous)
-            and np.isfinite(current)
-            and np.isclose(current, previous, rtol=0.0, atol=1.0e-9)
-        )
+        same_frame = False
+        if np.isfinite(previous) and np.isfinite(current):
+            with np.errstate(over="ignore", invalid="ignore"):
+                frame_delta = current - previous
+            same_frame = np.isfinite(frame_delta) and np.isclose(
+                frame_delta,
+                0.0,
+                rtol=0.0,
+                atol=1.0e-9,
+            )
         age[i] = age[i - 1] if same_frame else age[i - 1] + 1.0
     return age
 
@@ -155,7 +160,10 @@ def _hit_streak(group: pd.DataFrame) -> np.ndarray:
         current = frame_index[i]
         if not (np.isfinite(previous) and np.isfinite(current)):
             continue
-        frame_delta = current - previous
+        with np.errstate(over="ignore", invalid="ignore"):
+            frame_delta = current - previous
+        if not np.isfinite(frame_delta):
+            continue
         if np.isclose(frame_delta, 0.0, rtol=0.0, atol=1.0e-9):
             streak[i] = streak[i - 1]
         elif 0.0 < frame_delta <= 1.5:
@@ -170,7 +178,10 @@ def _time_since_first(group: pd.DataFrame) -> np.ndarray:
     ).to_numpy(dtype=float)
     if times.size == 0 or not np.isfinite(times[0]):
         return np.full(len(group), np.nan)
-    return times - times[0]
+    with np.errstate(over="ignore", invalid="ignore"):
+        elapsed = times - times[0]
+    elapsed[~np.isfinite(elapsed)] = np.nan
+    return elapsed
 
 
 def _frame_gap(group: pd.DataFrame) -> np.ndarray:
@@ -181,7 +192,8 @@ def _frame_gap(group: pd.DataFrame) -> np.ndarray:
             group.get("time_s", pd.Series(np.nan, index=group.index)),
             errors="coerce",
         ).to_numpy(dtype=float)
-    gaps = np.r_[0.0, np.diff(values)]
+    with np.errstate(over="ignore", invalid="ignore"):
+        gaps = np.r_[0.0, np.diff(values)]
     gaps = np.where(np.isfinite(gaps), gaps, np.nan)
     return np.where(gaps < 0.0, 0.0, gaps)
 
@@ -248,14 +260,15 @@ def _range_rate(group: pd.DataFrame) -> np.ndarray:
         group.get("time_s", pd.Series(np.nan, index=group.index)),
         errors="coerce",
     ).to_numpy(dtype=float)
-    dt = np.r_[np.nan, np.diff(times)]
-    dr = np.r_[np.nan, np.diff(ranges)]
-    return np.divide(
-        dr,
-        dt,
-        out=np.full(len(group), np.nan),
-        where=np.isfinite(dt) & (dt > 0.0),
-    )
+    with np.errstate(over="ignore", invalid="ignore"):
+        dt = np.r_[np.nan, np.diff(times)]
+        dr = np.r_[np.nan, np.diff(ranges)]
+    rate = np.full(len(group), np.nan)
+    valid_interval = np.isfinite(dt) & (dt > 0.0) & np.isfinite(dr)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        np.divide(dr, dt, out=rate, where=valid_interval)
+    rate[~np.isfinite(rate)] = np.nan
+    return rate
 
 
 def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarray:
@@ -278,7 +291,9 @@ def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarr
             ).to_numpy(dtype=float),
         ]
     )
-    diffs = np.r_[np.full((1, 3), np.nan), np.diff(velocity, axis=0)]
+    with np.errstate(over="ignore", invalid="ignore"):
+        velocity_diffs = np.diff(velocity, axis=0)
+    diffs = np.r_[np.full((1, 3), np.nan), velocity_diffs]
     norms = _row_norms(diffs)
     smoothness = (
         pd.Series(norms)
