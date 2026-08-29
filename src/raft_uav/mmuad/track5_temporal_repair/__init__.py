@@ -2,8 +2,8 @@
 
 The maintained implementation lives in the sibling ``track5_temporal_repair.py``
 module. This package preserves the public import path while rejecting invalid
-iteration controls and normalizing persisted Boolean diagnostics before output
-summaries are computed.
+iteration controls, stabilizing finite-extreme arithmetic, and normalizing
+persisted Boolean diagnostics before output summaries are computed.
 """
 
 from __future__ import annotations
@@ -17,6 +17,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from raft_uav.mmuad._track5_temporal_repair_numeric_stability_patch import (
+    install as _install_numeric_stability,
+)
+
 _IMPL_PATH = Path(__file__).resolve().parent.parent / "track5_temporal_repair.py"
 _SPEC = importlib.util.spec_from_file_location(
     "raft_uav.mmuad._track5_temporal_repair_legacy",
@@ -27,6 +31,7 @@ if _SPEC is None or _SPEC.loader is None:
 _IMPL = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _IMPL
 _SPEC.loader.exec_module(_IMPL)
+_install_numeric_stability(_IMPL)
 
 _ORIGINAL_REPAIR_TRACK5_TEMPORAL_SPIKES = _IMPL.repair_track5_temporal_spikes
 _ORIGINAL_WRITE_TRACK5_TEMPORAL_REPAIR_OUTPUTS = (
