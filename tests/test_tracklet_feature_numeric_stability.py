@@ -53,6 +53,26 @@ def test_tracklet_features_ignore_zero_duration_steps_in_speed_summary() -> None
     np.testing.assert_allclose(features["max_speed_mps"], [2.0])
 
 
+def test_tracklet_features_recover_representable_speed_after_step_overflow() -> None:
+    magnitude = 1.0e308
+    radar = pd.DataFrame(
+        {
+            "track_id": [7, 7],
+            "frame_index": [0, 1],
+            "time_s": [0.0, 4.0],
+            "east_m": [-magnitude, magnitude],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        features = tracklet_feature_frame(radar)
+
+    np.testing.assert_allclose(features["mean_speed_mps"], [5.0e307])
+    np.testing.assert_allclose(features["max_speed_mps"], [5.0e307])
+
+
 def test_frame_context_keeps_representable_large_neighbor_distances_finite() -> None:
     magnitude = 1.0e308
     candidates = pd.DataFrame(

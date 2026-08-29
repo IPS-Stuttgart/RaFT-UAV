@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from raft_uav.numeric import optional_float, optional_int
+from raft_uav.numeric import optional_float, optional_int, stable_euclidean_rate
 
 
 _TRACK_SORT_COLUMNS = ("time_s", "frame_index", "track_index")
@@ -193,26 +193,44 @@ def _position_step(group: pd.DataFrame) -> np.ndarray:
         pd.to_numeric,
         errors="coerce",
     ).to_numpy(dtype=float)
-    diffs = np.diff(positions, axis=0)
+    with np.errstate(over="ignore", invalid="ignore"):
+        diffs = np.diff(positions, axis=0)
     steps = np.r_[0.0, _row_norms(diffs)]
     return np.where(np.isfinite(steps), steps, np.nan)
 
 
 def _speed_from_positions(group: pd.DataFrame) -> np.ndarray:
-    steps = _position_step(group)
+    if not {"east_m", "north_m", "up_m"}.issubset(group.columns):
+        return np.full(len(group), np.nan)
+    positions = group[["east_m", "north_m", "up_m"]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    ).to_numpy(dtype=float)
     times = pd.to_numeric(
         group.get("time_s", pd.Series(np.nan, index=group.index)),
         errors="coerce",
     ).to_numpy(dtype=float)
-    dt = np.r_[np.nan, np.diff(times)]
-    speed = np.divide(
-        steps,
-        dt,
-        out=np.full(len(group), np.nan),
-        where=np.isfinite(dt) & (dt > 0.0),
-    )
-    speed[0] = np.nan
-    return speed
+    with np.errstate(over="ignore", invalid="ignore"):
+        dt = np.diff(times)
+        position_diffs = np.diff(positions, axis=0)
+    distances = _row_norms(position_diffs)
+    interval_speed = np.full(len(dt), np.nan)
+    valid_dt = np.isfinite(dt) & (dt > 0.0)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        np.divide(distances, dt, out=interval_speed, where=valid_dt)
+
+    finite_endpoints = np.isfinite(positions[:-1]).all(axis=1) & np.isfinite(
+        positions[1:]
+    ).all(axis=1)
+    repair = valid_dt & finite_endpoints & ~np.isfinite(interval_speed)
+    for interval_index in np.flatnonzero(repair):
+        interval_speed[interval_index] = stable_euclidean_rate(
+            positions[interval_index + 1],
+            positions[interval_index],
+            float(dt[interval_index]),
+        )
+    interval_speed[~np.isfinite(interval_speed)] = np.nan
+    return np.r_[np.nan, interval_speed]
 
 
 def _range_rate(group: pd.DataFrame) -> np.ndarray:
