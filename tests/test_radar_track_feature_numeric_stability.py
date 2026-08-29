@@ -47,3 +47,34 @@ def test_track_features_keep_representable_large_norms_finite() -> None:
         np.array([np.nan, expected_norm]),
         equal_nan=True,
     )
+
+
+def test_track_features_ignore_nonfinite_time_intervals() -> None:
+    radar = pd.DataFrame(
+        {
+            "time_s": [0.0, np.inf],
+            "frame_index": [0, 1],
+            "track_id": [7, 7],
+            "east_m": [0.0, 10.0],
+            "north_m": [0.0, 0.0],
+            "up_m": [0.0, 0.0],
+        }
+    )
+
+    with np.errstate(all="raise"):
+        featured = add_track_level_features(radar, window_frames=2)
+
+    np.testing.assert_allclose(
+        featured["track_position_step_m"].to_numpy(dtype=float),
+        np.array([0.0, 10.0]),
+    )
+    np.testing.assert_allclose(
+        featured["track_speed_from_positions_mps"].to_numpy(dtype=float),
+        np.array([np.nan, np.nan]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        featured["track_range_rate_mps"].to_numpy(dtype=float),
+        np.array([np.nan, np.nan]),
+        equal_nan=True,
+    )
