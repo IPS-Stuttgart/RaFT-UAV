@@ -205,7 +205,12 @@ def _speed_from_positions(group: pd.DataFrame) -> np.ndarray:
         errors="coerce",
     ).to_numpy(dtype=float)
     dt = np.r_[np.nan, np.diff(times)]
-    speed = np.divide(steps, dt, out=np.full(len(group), np.nan), where=dt > 0.0)
+    speed = np.divide(
+        steps,
+        dt,
+        out=np.full(len(group), np.nan),
+        where=np.isfinite(dt) & (dt > 0.0),
+    )
     speed[0] = np.nan
     return speed
 
@@ -227,7 +232,12 @@ def _range_rate(group: pd.DataFrame) -> np.ndarray:
     ).to_numpy(dtype=float)
     dt = np.r_[np.nan, np.diff(times)]
     dr = np.r_[np.nan, np.diff(ranges)]
-    return np.divide(dr, dt, out=np.full(len(group), np.nan), where=dt > 0.0)
+    return np.divide(
+        dr,
+        dt,
+        out=np.full(len(group), np.nan),
+        where=np.isfinite(dt) & (dt > 0.0),
+    )
 
 
 def _velocity_smoothness(group: pd.DataFrame, *, window_frames: int) -> np.ndarray:
