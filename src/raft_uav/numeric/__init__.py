@@ -65,6 +65,12 @@ def stable_euclidean_rate(
     current_array = np.asarray(current, dtype=float)
     previous_array = np.asarray(previous, dtype=float)
     dt_s = float(dt_s)
+    if (
+        current_array.shape != previous_array.shape
+        or not np.isfinite(dt_s)
+        or dt_s <= 0.0
+    ):
+        return np.nan
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         delta = current_array - previous_array
         distance = float(np.linalg.norm(delta))
@@ -72,11 +78,8 @@ def stable_euclidean_rate(
     if np.isfinite(direct):
         return direct
     if not (
-        current_array.shape == previous_array.shape
-        and bool(np.isfinite(current_array).all())
+        bool(np.isfinite(current_array).all())
         and bool(np.isfinite(previous_array).all())
-        and np.isfinite(dt_s)
-        and dt_s > 0.0
     ):
         return np.nan
 
