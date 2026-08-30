@@ -25,6 +25,32 @@ def test_output_api_requires_template_before_any_writes(tmp_path: Path) -> None:
     assert not output_dir.exists()
 
 
+def test_cli_requires_template_before_creating_outputs(tmp_path: Path) -> None:
+    submission_path = tmp_path / "submission.csv"
+    output_dir = tmp_path / "out"
+    pd.DataFrame(
+        {
+            "Sequence": ["seq0001", "seq0001", "seq0001"],
+            "Timestamp": [0.0, 1.0, 2.0],
+            "Position": ["(0, 0, 0)", "(1, 0, 0)", "(2, 0, 0)"],
+            "Classification": [2, 2, 2],
+        }
+    ).to_csv(submission_path, index=False)
+
+    with pytest.raises(ValueError, match="require_leaderboard_ready.*requires.*template"):
+        temporal_repair.main(
+            [
+                "--submission",
+                str(submission_path),
+                "--output-dir",
+                str(output_dir),
+                "--require-leaderboard-ready",
+            ]
+        )
+
+    assert not output_dir.exists()
+
+
 def test_missing_template_preflight_does_not_overwrite_existing_outputs(tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     output_dir.mkdir()
