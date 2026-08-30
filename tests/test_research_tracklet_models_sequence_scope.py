@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -108,3 +109,33 @@ def test_clutter_density_uses_every_available_scope_alias() -> None:
 
     assert summary["mean_candidates_per_frame"] == pytest.approx(2.0)
     assert summary["p95_candidates_per_frame"] == pytest.approx(2.9)
+
+
+def test_clutter_density_ignores_nonfinite_category_probabilities() -> None:
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 0, 0, 0, 0],
+            "time_s": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "cat_prob_uav": [0.2, 0.8, np.inf, -np.inf, np.nan],
+        }
+    )
+
+    summary = estimate_frame_clutter_density(radar)
+
+    assert summary["mean_cat_prob_uav"] == pytest.approx(0.5)
+    assert summary["low_cat_prob_rate"] == pytest.approx(0.5)
+
+
+def test_clutter_density_omits_probability_stats_without_finite_scores() -> None:
+    radar = pd.DataFrame(
+        {
+            "frame_index": [0, 0, 0],
+            "time_s": [0.0, 0.0, 0.0],
+            "cat_prob_uav": [np.inf, -np.inf, np.nan],
+        }
+    )
+
+    summary = estimate_frame_clutter_density(radar)
+
+    assert "mean_cat_prob_uav" not in summary
+    assert "low_cat_prob_rate" not in summary
