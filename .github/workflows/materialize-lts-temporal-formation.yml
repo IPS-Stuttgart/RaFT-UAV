@@ -75,7 +75,20 @@ jobs:
           tar -xzf /tmp/temporal-formation-payload.tar.gz
           rm -rf .materialize
           rm -f .github/workflows/materialize-lts-temporal-formation.yml
-      - name: Validate the materialized source tree
+      - name: Publish the materialized source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No materialized changes to publish"
+            exit 0
+          fi
+          git commit -m "Add temporal stabilization, formation and metric-aware LTS stack"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Validate the published source tree
         shell: bash
         run: |
           set -euo pipefail
@@ -110,12 +123,3 @@ jobs:
             tests/test_multi_uav_lts_metric_aware_boxes.py \
             tests/test_multi_uav_lts_adaptive_kinematic.py
           git diff --check
-      - name: Commit the verified tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Add temporal stabilization, formation and metric-aware LTS stack"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
