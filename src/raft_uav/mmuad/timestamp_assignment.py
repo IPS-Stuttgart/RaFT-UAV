@@ -44,20 +44,46 @@ def _timestamp_gap_s(left: float, right: float) -> float:
     return abs(float(left) - float(right))
 
 
-def _assignment_error(
+def _assignment_gaps(
     assignment: dict[int, int],
     requests: np.ndarray,
     predictions: np.ndarray,
-) -> float:
-    """Return an accurately accumulated absolute timestamp error."""
+) -> list[float]:
+    """Return the finite absolute gaps represented by one assignment."""
 
-    return math.fsum(
+    return [
         _timestamp_gap_s(
             predictions[prediction_index],
             requests[request_index],
         )
         for request_index, prediction_index in assignment.items()
+    ]
+
+
+def _assignment_error_is_no_greater(
+    candidate: dict[int, int],
+    reference: dict[int, int],
+    requests: np.ndarray,
+    predictions: np.ndarray,
+) -> bool:
+    """Compare assignment errors without overflowing their finite gap sums."""
+
+    candidate_gaps = _assignment_gaps(candidate, requests, predictions)
+    reference_gaps = _assignment_gaps(reference, requests, predictions)
+    largest_gap = max(
+        max(candidate_gaps, default=0.0),
+        max(reference_gaps, default=0.0),
     )
+    if largest_gap == 0.0:
+        return True
+    _, exponent = math.frexp(largest_gap)
+    candidate_error = math.fsum(
+        math.ldexp(gap, -exponent) for gap in candidate_gaps
+    )
+    reference_error = math.fsum(
+        math.ldexp(gap, -exponent) for gap in reference_gaps
+    )
+    return candidate_error <= reference_error
 
 
 def _validated_tolerance_s(value: Any) -> float:
@@ -263,7 +289,8 @@ def optimal_timestamp_assignment(
             if len(stable_assignment) > len(primary_assignment)
             else primary_assignment
         )
-    if _assignment_error(stable_assignment, requests, predictions) <= _assignment_error(
+    if _assignment_error_is_no_greater(
+        stable_assignment,
         primary_assignment,
         requests,
         predictions,
