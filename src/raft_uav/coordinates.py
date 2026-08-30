@@ -155,7 +155,11 @@ def _unwrap_real_object_scalar(
         finally:
             seen.remove(marker)
     if isinstance(value, np.generic):
-        return _unwrap_real_object_scalar(value.item(), error=error, seen=seen)
+        item = value.item()
+        # longdouble/clongdouble have no lossless Python scalar equivalent, so
+        # item() returns another NumPy scalar. Validate it without recursing.
+        if not isinstance(item, np.generic):
+            return _unwrap_real_object_scalar(item, error=error, seen=seen)
     if isinstance(value, (list, tuple, set, dict)) or np.iscomplexobj(value):
         raise ValueError(error)
     return value
