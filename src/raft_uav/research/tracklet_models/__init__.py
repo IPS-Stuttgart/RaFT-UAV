@@ -126,11 +126,8 @@ def estimate_frame_clutter_density(radar: pd.DataFrame) -> dict[str, float]:
         "p95_candidates_per_frame": float(np.percentile(counts, 95)),
     }
     if "cat_prob_uav" in radar.columns:
-        probs = (
-            pd.to_numeric(radar["cat_prob_uav"], errors="coerce")
-            .dropna()
-            .to_numpy(dtype=float)
-        )
+        probs = pd.to_numeric(radar["cat_prob_uav"], errors="coerce").to_numpy(dtype=float)
+        probs = probs[np.isfinite(probs)]
         if probs.size:
             out["mean_cat_prob_uav"] = float(np.mean(probs))
             out["low_cat_prob_rate"] = float(np.mean(probs < 0.4))
