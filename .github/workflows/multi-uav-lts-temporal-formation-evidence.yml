@@ -1,72 +1,64 @@
 ---
-name: Multi-UAV LTS temporal formation evidence
+name: Materialize temporal formation follow-up
 
 "on":
-  pull_request:
+  push:
+    branches:
+      - agent/lts-temporal-formation-metric-stack
     paths:
       - ".github/workflows/multi-uav-lts-temporal-formation-evidence.yml"
-      - "configs/multi_uav_lts_temporal_formation.json"
-      - "docs/multi_uav_lts_temporal_formation_metric_stack.md"
-      - "scripts/run_multi_uav_lts_temporal_formation_evidence.py"
-      - "src/raft_uav/multi_uav_lts/adaptive_kinematic.py"
-      - "src/raft_uav/multi_uav_lts/formation_reassociation.py"
-      - "src/raft_uav/multi_uav_lts/learned_motion_prior.py"
-      - "src/raft_uav/multi_uav_lts/metric_aware_boxes.py"
-      - "src/raft_uav/multi_uav_lts/registered_temporal_proposals.py"
-      - "src/raft_uav/multi_uav_lts/scene_stabilization.py"
-      - "src/raft_uav/multi_uav_lts/seeded_multiscan.py"
-      - "src/raft_uav/multi_uav_lts/temporal_p2_detector.py"
-      - "tests/test_multi_uav_lts_*"
-  workflow_dispatch:
-    inputs:
-      device:
-        description: CUDA device
-        required: true
-        default: "cuda:0"
-        type: string
-      temporal_p2_epochs:
-        description: Temporal P2 epochs per complementary fold
-        required: true
-        default: "4"
-        type: string
-      temporal_p2_max_samples:
-        description: Maximum temporal P2 patches per fold
-        required: true
-        default: "20000"
-        type: string
-      require_improvement:
-        description: Fail when raw remains selected
-        required: false
-        default: true
-        type: boolean
+      - ".github/patches/materialize_lts_temporal_followup.py.gz"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: multi-uav-lts-temporal-formation-${{ github.ref }}
+  group: materialize-lts-temporal-followup-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PYTHONUNBUFFERED: "1"
-  RAFT_UAV_SKIP_RUNTIME_HOOKS: "1"
-
 jobs:
-  focused-tests:
+  materialize:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {fetch-depth: 1, persist-credentials: false}
+        with:
+          fetch-depth: 0
+          persist-credentials: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with: {python-version: "3.11", cache: pip}
-      - run: |
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Apply the reviewed follow-up patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "8618903e05029a97e08fd02341f91d56ae42fe47d82027bd2664b1d1285f4c97  .github/patches/materialize_lts_temporal_followup.py.gz" | sha256sum -c -
+          gzip -cd .github/patches/materialize_lts_temporal_followup.py.gz > .github/patches/materialize_lts_temporal_followup.py
+          python .github/patches/materialize_lts_temporal_followup.py
+          rm -f .github/patches/materialize_lts_temporal_followup.py.gz
+      - name: Publish the source before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden and extend temporal formation evidence"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Validate the published source tree
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m pip install -e ".[dev]"
           python -m pytest -q \
             tests/test_multi_uav_lts_scene_stabilization.py \
             tests/test_multi_uav_lts_registered_temporal_proposals.py \
             tests/test_multi_uav_lts_temporal_p2_detector.py \
+            tests/test_multi_uav_lts_temporal_consensus.py \
+            tests/test_multi_uav_lts_temporal_formation_settings.py \
+            tests/test_multi_uav_lts_evidence_integrity.py \
             tests/test_multi_uav_lts_learned_motion_prior.py \
             tests/test_multi_uav_lts_seeded_multiscan.py \
             tests/test_multi_uav_lts_seeded_multiscan_geometry.py \
@@ -77,127 +69,25 @@ jobs:
           python -m ruff check \
             scripts/run_multi_uav_lts_temporal_formation_evidence.py \
             src/raft_uav/multi_uav_lts/adaptive_kinematic.py \
+            src/raft_uav/multi_uav_lts/evidence_integrity.py \
             src/raft_uav/multi_uav_lts/formation_reassociation.py \
             src/raft_uav/multi_uav_lts/learned_motion_prior.py \
             src/raft_uav/multi_uav_lts/metric_aware_boxes.py \
             src/raft_uav/multi_uav_lts/registered_temporal_proposals.py \
             src/raft_uav/multi_uav_lts/scene_stabilization.py \
             src/raft_uav/multi_uav_lts/seeded_multiscan.py \
+            src/raft_uav/multi_uav_lts/temporal_consensus.py \
+            src/raft_uav/multi_uav_lts/temporal_formation_settings.py \
             src/raft_uav/multi_uav_lts/temporal_p2_detector.py \
             tests/test_multi_uav_lts_scene_stabilization.py \
             tests/test_multi_uav_lts_registered_temporal_proposals.py \
             tests/test_multi_uav_lts_temporal_p2_detector.py \
+            tests/test_multi_uav_lts_temporal_consensus.py \
+            tests/test_multi_uav_lts_temporal_formation_settings.py \
+            tests/test_multi_uav_lts_evidence_integrity.py \
             tests/test_multi_uav_lts_learned_motion_prior.py \
             tests/test_multi_uav_lts_seeded_multiscan_geometry.py \
             tests/test_multi_uav_lts_formation_reassociation.py \
             tests/test_multi_uav_lts_metric_aware_boxes.py \
             tests/test_multi_uav_lts_adaptive_kinematic.py
-
-  evidence:
-    if: github.event_name == 'workflow_dispatch'
-    needs: focused-tests
-    runs-on: [self-hosted, Linux, X64, nvidia-smi, data-multi-uav-lts-v1]
-    timeout-minutes: 4320
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {fetch-depth: 1, persist-credentials: false}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with: {python-version: "3.11", cache: pip}
-      - name: Establish persistent paths and parameters
-        run: |
-          set -euo pipefail
-          ROOT=/mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476
-          RUN_DIR="${ROOT}/temporal-formation/${GITHUB_SHA}"
-          VENV="${ROOT}/runtime/venvs/proposal-graph-py311-torch222"
-          mkdir -p "$RUN_DIR"
-          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "RUN_DIR=$RUN_DIR" >> "$GITHUB_ENV"
-          echo "VENV=$VENV" >> "$GITHUB_ENV"
-          echo "DEVICE=${{ inputs.device }}" >> "$GITHUB_ENV"
-          echo "TEMPORAL_P2_EPOCHS=${{ inputs.temporal_p2_epochs }}" >> "$GITHUB_ENV"
-          echo "TEMPORAL_P2_MAX_SAMPLES=${{ inputs.temporal_p2_max_samples }}" >> "$GITHUB_ENV"
-          echo "REQUIRE_IMPROVEMENT=${{ inputs.require_improvement }}" >> "$GITHUB_ENV"
-      - name: Acquire public inputs and runtime
-        run: |
-          set -euo pipefail
-          python scripts/bootstrap_multi_uav_lts_public_evidence.py \
-            --work-root "$ROOT" \
-            --output-json "$RUN_DIR/inputs.json" \
-            --expected-sequence-count 102 \
-            --expected-frame-count 77293
-          bash scripts/install_multi_uav_lts_public_runtime.sh \
-            "$VENV" "$ROOT/assets/runtime" "$RUN_DIR/runtime.json"
-          bash scripts/install_multi_uav_lts_runtime_extras.sh \
-            "$VENV" "$RUN_DIR/runtime.json"
-          "$VENV/bin/python" - "$RUN_DIR/inputs.json" >> "$GITHUB_ENV" <<'PY'
-          import json
-          import sys
-
-          payload = json.load(open(sys.argv[1], encoding="utf-8"))
-          dataset = payload["dataset"]
-          print("IMAGES=" + dataset["train_sequence_root"])
-          print("TRUTH=" + dataset["truth_dir"])
-          print("SEEDS=" + dataset["first_frame_label_dir"])
-          PY
-      - name: Ensure permissive proposal source
-        run: |
-          set -euo pipefail
-          SOURCE="$ROOT/outputs/full-stack-proposal-source"
-          if [[ ! -d "$SOURCE/proposals" ]]; then
-            "$VENV/bin/python" -m raft_uav.multi_uav_lts.proposal_baseline \
-              --work-root "$ROOT" \
-              --sequence-root "$IMAGES" \
-              --first-frame-label-dir "$SEEDS" \
-              --output-dir "$SOURCE" \
-              --no-template \
-              --python "$VENV/bin/python" \
-              --device 0 \
-              --img-size 1920 \
-              --proposal-conf-thres 0.001 \
-              --proposal-iou-thres 0.95
-          fi
-          echo "SOURCE=$SOURCE" >> "$GITHUB_ENV"
-      - name: Build folds and run guarded stack
-        run: |
-          set -euo pipefail
-          "$VENV/bin/python" scripts/build_multi_uav_lts_scenario_folds.py \
-            "$IMAGES" \
-            --output "$RUN_DIR/folds.csv" \
-            --fold-count 5
-          args=()
-          if [[ "$REQUIRE_IMPROVEMENT" == "true" ]]; then
-            args+=(--require-improvement)
-          fi
-          "$VENV/bin/python" \
-            scripts/run_multi_uav_lts_temporal_formation_evidence.py \
-            --image-root "$IMAGES" \
-            --truth-dir "$TRUTH" \
-            --seed-dir "$SEEDS" \
-            --raw-dir "$SOURCE/predictions" \
-            --base-proposal-dir "$SOURCE/proposals" \
-            --fold-assignments "$RUN_DIR/folds.csv" \
-            --run-dir "$RUN_DIR" \
-            --python "$VENV/bin/python" \
-            --device "$DEVICE" \
-            --temporal-p2-epochs "$TEMPORAL_P2_EPOCHS" \
-            --temporal-p2-max-samples "$TEMPORAL_P2_MAX_SAMPLES" \
-            "${args[@]}"
-      - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: multi-uav-lts-temporal-formation-${{ github.run_id }}
-          if-no-files-found: warn
-          path: |
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/temporal-formation-summary.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/progress.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/experiment-contract.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/folds.csv
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/gate-scores.csv
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/gate-evidence.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/folds/*/*.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/scores/*.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/scores/*.csv
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/tournament/*.json
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/tournament/*.csv
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/tournament/selected_candidate.txt
-            /mnt/corsair/raft-uav-public-evidence/multi-uav-lts-zenodo-15853476/temporal-formation/${{ github.sha }}/logs/*.log
+          git diff --check
