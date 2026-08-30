@@ -1,0 +1,151 @@
+---
+name: Materialize and normalize LTS temporal formation source
+
+"on":
+  push:
+    branches:
+      - agent/lts-temporal-formation-metric-stack
+    paths:
+      - ".github/workflows/materialize-lts-temporal-followup.yml"
+      - ".github/patches/materialize_lts_temporal_followup.py.gz"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: materialize-lts-temporal-followup-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: agent/lts-temporal-formation-metric-stack
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Materialize reviewed source payload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload=.github/patches/materialize_lts_temporal_followup.py.gz
+          test -f "$payload"
+          gzip -t "$payload"
+          payload_sha=$(sha256sum "$payload" | awk '{print $1}')
+          echo "payload_sha256=$payload_sha"
+          gzip -cd "$payload" > /tmp/materialize_lts_temporal_followup.py
+
+          set +e
+          python /tmp/materialize_lts_temporal_followup.py \
+            > /tmp/materializer.stdout \
+            2> /tmp/materializer.stderr
+          rc=$?
+          set -e
+
+          if (( rc != 0 )); then
+            {
+              printf 'return_code=%s\n' "$rc"
+              printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+              printf 'commit=%s\n' "$GITHUB_SHA"
+              printf 'payload_sha256=%s\n' "$payload_sha"
+              printf '\n=== stdout ===\n'
+              cat /tmp/materializer.stdout
+              printf '\n=== stderr ===\n'
+              cat /tmp/materializer.stderr
+            } > /tmp/materializer-diagnostic.txt
+
+            echo '::group::materializer diagnostic'
+            tail -n 160 /tmp/materializer-diagnostic.txt
+            echo '::endgroup::'
+
+            {
+              echo '### Temporal source materializer failed'
+              echo
+              echo '```text'
+              tail -n 160 /tmp/materializer-diagnostic.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            tail -c 50000 /tmp/materializer-diagnostic.txt \
+              > /tmp/materializer-tail.txt
+            jq -Rs \
+              '{body: ("<!-- lts-materializer-diagnostic -->\n### Temporal source materializer failed\n\n```text\n" + . + "\n```")}' \
+              /tmp/materializer-tail.txt > /tmp/comment.json
+            curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/2550/comments" \
+              --data-binary @/tmp/comment.json || true
+
+            annotation=$(tail -n 40 /tmp/materializer.stderr \
+              | tr '\n' ' ' \
+              | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=Temporal materializer failed::$annotation"
+            exit "$rc"
+          fi
+
+          cat /tmp/materializer.stdout
+          test ! -s /tmp/materializer.stderr || cat /tmp/materializer.stderr >&2
+
+      - name: Restore ordinary CI and evidence workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_commit=792b013534f8461d7578b95d7b42ef9b2fae05ff
+          git show "$source_commit:.github/workflows/ci.yml" \
+            > .github/workflows/ci.yml
+          git show "$source_commit:.github/workflows/multi-uav-lts-temporal-formation-evidence.yml" \
+            > .github/workflows/multi-uav-lts-temporal-formation-evidence.yml
+          rm -rf .github/diagnostics
+          rm -f .github/patches/materialize_lts_temporal_followup.py.gz
+          rm -f .github/workflows/materialize-lts-temporal-followup.yml
+          git diff --check
+          git status --short
+
+      - name: Publish materialized ordinary source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && {
+            echo 'Materializer produced no source changes' >&2
+            exit 1
+          }
+          git commit -m 'fix(lts): materialize source and restore CI'
+          git push origin HEAD:agent/lts-temporal-formation-metric-stack
+
+      - name: Validate importable generated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m py_compile \
+            scripts/run_multi_uav_lts_temporal_formation_evidence.py
+          python -m pytest -q \
+            tests/test_multi_uav_lts_scene_stabilization.py \
+            tests/test_multi_uav_lts_registered_temporal_proposals.py \
+            tests/test_multi_uav_lts_temporal_consensus.py \
+            tests/test_multi_uav_lts_temporal_formation_settings.py \
+            tests/test_multi_uav_lts_evidence_integrity.py \
+            tests/test_multi_uav_lts_learned_motion_prior.py \
+            tests/test_multi_uav_lts_seeded_multiscan.py \
+            tests/test_multi_uav_lts_seeded_multiscan_geometry.py \
+            tests/test_multi_uav_lts_formation_reassociation.py \
+            tests/test_multi_uav_lts_metric_aware_boxes.py \
+            tests/test_multi_uav_lts_adaptive_kinematic.py

@@ -1,0 +1,46 @@
+{
+  "association": {
+    "affinity_weight": 0.18,
+    "min_birth_hits": 5,
+    "min_birth_span": 4
+  },
+  "stabilization": {
+    "max_shift": 48.0,
+    "min_peak_ratio": 1.18,
+    "mask_scale": 3.0,
+    "downsample": 2
+  },
+  "temporal_p2": {
+    "offsets": [-2, -1, 1, 2],
+    "patch_size": 192,
+    "epochs": 4,
+    "max_training_samples": 20000,
+    "score_threshold": 0.003
+  },
+  "registered_residual": {
+    "offsets": [-4, -2, -1, 1, 2, 4],
+    "robust_z": 3.2,
+    "minimum_neighbours": 2
+  },
+  "motion_prior": {
+    "components": 4,
+    "max_gap": 4,
+    "raw_and_stabilized_models": true
+  },
+  "formation": {
+    "motion_scale": 3.0,
+    "formation_weight": 0.45,
+    "bidirectional": true
+  },
+  "metric_candidates": {
+    "guard_safe_fixed_scales": [1.25, 1.35],
+    "guard_safe_maximum_scale": 1.35,
+    "stress_maximum_scale": 2.2,
+    "short_gap_interpolation": 1
+  },
+  "selection": {
+    "fold_count": 5,
+    "bootstrap_samples": 5000,
+    "raw_fallback": true
+  }
+}
