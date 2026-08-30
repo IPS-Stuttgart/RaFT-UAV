@@ -66,6 +66,46 @@ def _finite_real_scalar(value: object, *, field: str) -> float:
     return number
 
 
+def _stable_euclidean_row_norms(values: np.ndarray) -> np.ndarray:
+    """Return row norms without losing representable finite distances."""
+
+    array = np.asarray(values, dtype=float)
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        norms = np.linalg.norm(array, axis=1)
+    repair = np.isfinite(array).all(axis=1) & ~np.isfinite(norms)
+    if bool(np.any(repair)):
+        norms = np.asarray(norms, dtype=float).copy()
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            norms[repair] = np.hypot.reduce(np.abs(array[repair]), axis=1)
+    return norms
+
+
+def _truth_gated_rows(
+    radar: pd.DataFrame,
+    truth: pd.DataFrame,
+    truth_gate_m: float,
+    truth_time_gate_s: float,
+) -> pd.DataFrame:
+    """Gate radar rows without overflowing finite time or spatial residuals."""
+
+    truth_times = truth["time_s"].to_numpy(dtype=float)
+    query_times = radar["time_s"].to_numpy(dtype=float)
+    if query_times.size == 0 or not bool(np.any(np.isfinite(truth_times))):
+        return radar.iloc[0:0].copy()
+
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        truth_indices = _aerpaw._nearest_time_indices(truth_times, query_times)
+        time_errors = np.abs(truth_times[truth_indices] - query_times)
+        radar_xyz = radar[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+        truth_xyz = truth[["east_m", "north_m", "up_m"]].to_numpy(dtype=float)
+        residuals = radar_xyz - truth_xyz[truth_indices]
+    spatial_errors = _stable_euclidean_row_norms(residuals)
+    keep = (time_errors <= float(truth_time_gate_s)) & (
+        spatial_errors <= float(truth_gate_m)
+    )
+    return radar.loc[keep].copy()
+
+
 def _find_rf_sensor_and_radar_root(dataset_root: Path) -> Path:
     """Find either supported RF-root spelling at any extraction depth."""
 
@@ -165,3 +205,5 @@ _aerpaw.normalize_rf = _normalize_rf
 _aerpaw._IMPL.normalize_rf = _normalize_rf
 _aerpaw.normalize_radar = _normalize_radar
 _aerpaw._IMPL.normalize_radar = _normalize_radar
+_aerpaw._truth_gated_rows = _truth_gated_rows
+_aerpaw._IMPL._truth_gated_rows = _truth_gated_rows
