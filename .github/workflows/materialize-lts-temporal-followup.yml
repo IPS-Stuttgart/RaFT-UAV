@@ -11,6 +11,8 @@ name: Materialize and normalize LTS temporal formation source
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: materialize-lts-temporal-followup-${{ github.ref }}
@@ -34,6 +36,8 @@ jobs:
 
       - name: Materialize reviewed source payload
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           payload=.github/patches/materialize_lts_temporal_followup.py.gz
@@ -50,24 +54,64 @@ jobs:
           set -e
 
           if (( rc != 0 )); then
-            mkdir -p .github/diagnostics
-            cp /tmp/materialize_lts_temporal_followup.py \
-              .github/diagnostics/materialize_lts_temporal_followup.py
-            {
-              printf 'run_id=%s\n' "$GITHUB_RUN_ID"
-              printf 'commit=%s\n' "$GITHUB_SHA"
-              printf 'payload_sha256=%s\n' "$(sha256sum "$payload" | awk '{print $1}')"
-              printf 'return_code=%s\n\n=== stdout ===\n' "$rc"
-              cat /tmp/materializer.stdout
-              printf '\n=== stderr ===\n'
-              cat /tmp/materializer.stderr
-            } > .github/diagnostics/materializer_failure.txt
+            python - "$rc" <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+          import urllib.request
 
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add .github/diagnostics
-            git commit -m "diagnose(lts): capture materializer failure"
-            git push origin HEAD:agent/lts-temporal-formation-metric-stack
+          rc = int(sys.argv[1])
+          stdout = pathlib.Path("/tmp/materializer.stdout").read_text(
+              encoding="utf-8", errors="replace"
+          )
+          stderr = pathlib.Path("/tmp/materializer.stderr").read_text(
+              encoding="utf-8", errors="replace"
+          )
+          payload = pathlib.Path(
+              ".github/patches/materialize_lts_temporal_followup.py.gz"
+          )
+          import hashlib
+          payload_sha = hashlib.sha256(payload.read_bytes()).hexdigest()
+          details = (
+              f"return_code={rc}\n"
+              f"run_id={os.environ.get('GITHUB_RUN_ID', '')}\n"
+              f"commit={os.environ.get('GITHUB_SHA', '')}\n"
+              f"payload_sha256={payload_sha}\n\n"
+              f"=== stdout ===\n{stdout}\n"
+              f"=== stderr ===\n{stderr}\n"
+          )
+          details = details[-55000:]
+          body = (
+              "<!-- lts-materializer-diagnostic -->\n"
+              "### Temporal source materializer failed\n\n"
+              "The compressed payload was valid gzip, but its Python generator "
+              "returned a nonzero status. Exact diagnostic:\n\n"
+              f"```text\n{details}\n```"
+          )
+          repo = os.environ["GITHUB_REPOSITORY"]
+          url = f"https://api.github.com/repos/{repo}/issues/2550/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"body": body}).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+                  "User-Agent": "raft-uav-materializer-diagnostic",
+              },
+          )
+          with urllib.request.urlopen(request) as response:
+              print(f"posted diagnostic comment: HTTP {response.status}")
+
+          annotation = " | ".join(
+              line.strip() for line in stderr.splitlines()[-20:] if line.strip()
+          )
+          annotation = annotation.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Temporal materializer failed::{annotation}")
+          PY
             exit "$rc"
           fi
 
