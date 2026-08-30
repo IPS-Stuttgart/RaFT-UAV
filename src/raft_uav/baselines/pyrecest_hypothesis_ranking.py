@@ -249,8 +249,12 @@ def _records_from_item(item: Mapping[str, Any]) -> Sequence[Any]:
     if records is not None:
         return records  # type: ignore[return-value]
     if "nis_values" in item:
-        nis_values = item.get("nis_values") or []
-        residual_values = item.get("residual_values") or []
+        nis_values = item.get("nis_values")
+        if nis_values is None:
+            nis_values = []
+        residual_values = item.get("residual_values")
+        if residual_values is None:
+            residual_values = []
         rows = []
         for idx, nis in enumerate(nis_values):
             row: dict[str, Any] = {"nis": nis, "action": "updated"}
