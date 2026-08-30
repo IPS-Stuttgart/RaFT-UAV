@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from collections.abc import Iterable, Sequence
 import json
 from pathlib import Path
@@ -30,6 +31,37 @@ def _euclidean_norm(values: np.ndarray, *, axis: int) -> np.ndarray:
             stable = np.hypot.reduce(moved, axis=-1)
         norms[repair] = stable[repair]
     return norms
+
+
+def _exact_standardized_logit(
+    values: np.ndarray,
+    mean: np.ndarray,
+    scale: np.ndarray,
+    weights: np.ndarray,
+    intercept: float,
+) -> float:
+    """Recompute one standardized affine score without float overflow artifacts."""
+
+    total = Fraction.from_float(float(intercept))
+    for value, center, feature_scale, weight in zip(
+        values,
+        mean,
+        scale,
+        weights,
+        strict=True,
+    ):
+        weight = float(weight)
+        if weight == 0.0:
+            continue
+        total += (
+            (Fraction.from_float(float(value)) - Fraction.from_float(float(center)))
+            * Fraction.from_float(weight)
+            / Fraction.from_float(float(feature_scale))
+        )
+    try:
+        return float(total)
+    except OverflowError:
+        return np.inf if total > 0 else -np.inf
 
 
 @dataclass(frozen=True)
@@ -68,8 +100,18 @@ class StandardizedLogisticModel:
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         x = _feature_matrix(frame, self.feature_names)
         filled = np.where(np.isfinite(x), x, self.mean.reshape(1, -1))
-        z = (filled - self.mean.reshape(1, -1)) / self.scale.reshape(1, -1)
-        return _sigmoid(z @ self.weights + self.intercept)
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            z = (filled - self.mean.reshape(1, -1)) / self.scale.reshape(1, -1)
+            logits = z @ self.weights + self.intercept
+        for row_index in np.flatnonzero(~np.isfinite(logits)):
+            logits[row_index] = _exact_standardized_logit(
+                filled[row_index],
+                self.mean,
+                self.scale,
+                self.weights,
+                self.intercept,
+            )
+        return _sigmoid(logits)
 
     def to_dict(self) -> dict[str, object]:
         return {
