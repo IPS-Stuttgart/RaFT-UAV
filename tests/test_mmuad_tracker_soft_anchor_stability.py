@@ -25,6 +25,24 @@ def _large_residual_candidates() -> CandidateFrame:
     )
 
 
+def _large_uncertainty_candidates(*, std_xy_m: float, std_z_m: float) -> CandidateFrame:
+    return CandidateFrame(
+        pd.DataFrame(
+            {
+                "sequence_id": ["sequence-1", "sequence-1"],
+                "time_s": [0.0, 1.0],
+                "source": ["radar", "radar"],
+                "track_id": ["anchor", "anchor"],
+                "x_m": [0.0, 0.0],
+                "y_m": [0.0, 0.0],
+                "z_m": [0.0, 10.0],
+                "std_xy_m": [std_xy_m, std_xy_m],
+                "std_z_m": [std_z_m, std_z_m],
+            }
+        )
+    )
+
+
 def test_soft_anchor_gate_handles_large_representable_norm() -> None:
     config = replace(
         TrackerConfig(),
@@ -63,3 +81,29 @@ def test_soft_anchor_cap_preserves_direction_for_large_representable_norm() -> N
         rtol=1.0e-12,
         atol=0.0,
     )
+
+
+def test_selected_update_handles_finite_standard_deviation_square_overflow() -> None:
+    candidates = _large_uncertainty_candidates(std_xy_m=1.0e308, std_z_m=1.0e308)
+
+    with np.errstate(all="raise"):
+        output = run_mmuad_tracker(candidates)
+
+    states = output.estimates[
+        ["state_x_m", "state_y_m", "state_z_m", "v_x_mps", "v_y_mps", "v_z_mps"]
+    ].to_numpy(dtype=float)
+    assert np.isfinite(states).all()
+
+
+def test_anisotropic_measurement_covariance_keeps_precise_axis_update() -> None:
+    candidates = _large_uncertainty_candidates(std_xy_m=1.0e100, std_z_m=1.0)
+
+    with np.errstate(all="raise"):
+        output = run_mmuad_tracker(candidates)
+
+    final = output.estimates.sort_values("time_s").iloc[-1]
+    assert final["update_action"] == "selected_update"
+    assert float(final["state_z_m"]) > 1.0
+    assert np.isfinite(
+        final[["state_x_m", "state_y_m", "state_z_m"]].to_numpy(dtype=float)
+    ).all()

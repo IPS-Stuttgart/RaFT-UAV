@@ -4,14 +4,16 @@ The maintained implementation lives in the sibling ``tracker.py`` module. This
 package preserves the public import path while normalizing numeric inputs,
 ignoring unusable timestamps in mobility scoring, preventing blank track IDs
 from becoming false multi-frame identities, ordering same-timestamp updates
-deterministically, keeping final same-time truth samples, and keeping truth
-interpolation inside the supported time span.
+deterministically, keeping finite measurement covariances, keeping final
+same-time truth samples, and keeping truth interpolation inside the supported
+time span.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 import importlib.util
+import math
 from pathlib import Path
 import sys
 
@@ -78,6 +80,7 @@ _FILTER_HELPER_COLUMNS = (
     "_std_xy_sort_key",
     "_std_z_sort_key",
 )
+_FLOAT_MAX = np.finfo(float).max
 
 
 def _normalize_covariance_scale(value: object, *, field_name: str) -> float:
@@ -108,6 +111,60 @@ def _normalize_boolean_control(value: object, *, field_name: str) -> bool:
     if not isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{field_name} must be a Boolean scalar")
     return bool(value)
+
+
+def _finite_scaled_square(value: float, scale: float) -> float:
+    """Return ``value**2 * scale`` without overflowing intermediate products."""
+
+    value = float(value)
+    scale = float(scale)
+    if scale == 0.0:
+        return 0.0
+    value_mantissa, value_exponent = math.frexp(value)
+    scale_mantissa, scale_exponent = math.frexp(scale)
+    mantissa = value_mantissa * value_mantissa * scale_mantissa
+    exponent = 2 * value_exponent + scale_exponent
+    try:
+        variance = math.ldexp(mantissa, exponent)
+    except OverflowError:
+        return _FLOAT_MAX
+    return min(float(variance), _FLOAT_MAX)
+
+
+def _measurement_covariance(
+    std_xy: float,
+    std_z: float,
+    *,
+    scale: float,
+) -> np.ndarray:
+    """Build a finite diagonal measurement covariance for a validated scale."""
+
+    xy_variance = _finite_scaled_square(std_xy, scale)
+    z_variance = _finite_scaled_square(std_z, scale)
+    return np.diag([xy_variance, xy_variance, z_variance])
+
+
+def _stable_filter_update(
+    filt: object,
+    measurement: np.ndarray,
+    covariance: np.ndarray,
+) -> None:
+    """Apply the Kalman update without SVD cutoff on highly anisotropic covariance."""
+
+    h = np.zeros((3, 6), dtype=float)
+    h[0, 0] = h[1, 1] = h[2, 2] = 1.0
+    innovation = np.asarray(measurement, dtype=float) - h @ filt.state
+    innovation_covariance = h @ filt.covariance @ h.T + covariance
+    prior_cross_covariance = filt.covariance @ h.T
+    try:
+        gain = np.linalg.solve(
+            innovation_covariance,
+            prior_cross_covariance.T,
+        ).T
+    except np.linalg.LinAlgError:
+        gain = prior_cross_covariance @ np.linalg.pinv(innovation_covariance)
+    filt.state = filt.state + gain @ innovation
+    filt.covariance = (np.eye(6) - gain @ h) @ filt.covariance
 
 
 def _validated_tracker_config(config: TrackerConfig) -> TrackerConfig:
@@ -302,10 +359,17 @@ def _run_sequence_filter(
         z = row[["x_m", "y_m", "z_m"]].to_numpy(float)
         std_xy = _LEGACY._positive_float(row.get("std_xy_m", 10.0), default=10.0)
         std_z = _LEGACY._positive_float(row.get("std_z_m", std_xy), default=std_xy)
-        covariance = np.diag([std_xy**2, std_xy**2, std_z**2])
         if is_selected:
             action = "selected_update"
-            filt.update(z, covariance * config.primary_covariance_scale)
+            _stable_filter_update(
+                filt,
+                z,
+                _measurement_covariance(
+                    std_xy,
+                    std_z,
+                    scale=config.primary_covariance_scale,
+                ),
+            )
         else:
             predicted = filt.state[:3].copy()
             innovation = z - predicted
@@ -320,7 +384,15 @@ def _run_sequence_filter(
                 if horizontal_norm > config.soft_anchor_cap_m > 0:
                     innovation[:2] *= config.soft_anchor_cap_m / horizontal_norm
                 capped_z = predicted + innovation
-                filt.update(capped_z, covariance * config.secondary_covariance_scale)
+                _stable_filter_update(
+                    filt,
+                    capped_z,
+                    _measurement_covariance(
+                        std_xy,
+                        std_z,
+                        scale=config.secondary_covariance_scale,
+                    ),
+                )
         state = filt.state.copy()
         estimate_rows.append(
             {
