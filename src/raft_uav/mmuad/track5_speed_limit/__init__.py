@@ -56,7 +56,14 @@ def _finite_scalar(value: object, *, message: str) -> float:
             if identity in seen_arrays:
                 raise ValueError(message)
             seen_arrays.add(identity)
-        scalar = scalar.item()
+        item = scalar.item()
+        scalar = item
+        # ``longdouble`` has no lossless native Python scalar equivalent on
+        # platforms with extended precision, so NumPy intentionally returns
+        # another NumPy scalar from ``item()``. Stop unwrapping at that point
+        # instead of recursing forever; the validation below can consume it.
+        if isinstance(item, np.generic):
+            break
     if (
         np.ma.is_masked(scalar)
         or isinstance(scalar, (bool, np.bool_))
@@ -141,7 +148,10 @@ def _unwrap_numeric_cell(value: object) -> tuple[object, str | None]:
             scalar = scalar.item()
             continue
         if isinstance(scalar, np.generic):
-            scalar = scalar.item()
+            item = scalar.item()
+            if isinstance(item, np.generic):
+                return item, None
+            scalar = item
             continue
         return scalar, None
 
