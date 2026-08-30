@@ -528,9 +528,12 @@ def load_jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [load_jsonable(item) for item in value]
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return load_jsonable(value.tolist())
     if _is_json_missing_scalar(value):
         return None
+    if isinstance(value, np.floating):
+        number = float(value)
+        return number if np.isfinite(number) else None
     if hasattr(value, "item") and callable(value.item):
         try:
             return load_jsonable(value.item())
