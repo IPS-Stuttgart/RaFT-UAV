@@ -39,6 +39,15 @@ def _exact_integer_scalar(value: object, *, name: str) -> int:
             (bool, np.bool_, complex, np.complexfloating),
         ):
             raise ValueError(error)
+        if isinstance(item, (int, np.integer)):
+            return int(item)
+        if isinstance(item, (float, np.floating)):
+            if not np.isfinite(item):
+                raise ValueError(error)
+            integer = int(item)
+            if item != integer:
+                raise ValueError(error)
+            return integer
         number = float(item)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(error) from exc
