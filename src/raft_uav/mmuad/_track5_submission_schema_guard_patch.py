@@ -52,7 +52,9 @@ def _install_submission_schema_guard(ensemble: Any) -> None:
 def _install_speed_limit_timestamp_guard(speed_limit: Any) -> None:
     """Reject duplicate timestamps that the projector cannot physically constrain."""
 
-    original: Callable[[pd.DataFrame], pd.DataFrame] = speed_limit._normalized_submission
+    original: Callable[[pd.DataFrame], pd.DataFrame] = (
+        speed_limit._normalized_submission
+    )
     if getattr(original, _SPEED_LIMIT_PATCH_MARKER, False):
         return
 
