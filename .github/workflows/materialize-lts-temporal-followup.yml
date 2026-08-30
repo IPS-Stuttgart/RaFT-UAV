@@ -41,7 +41,38 @@ jobs:
           gzip -t "$payload"
           echo "payload_sha256=$(sha256sum "$payload" | awk '{print $1}')"
           gzip -cd "$payload" > /tmp/materialize_lts_temporal_followup.py
-          python /tmp/materialize_lts_temporal_followup.py
+
+          set +e
+          python /tmp/materialize_lts_temporal_followup.py \
+            > /tmp/materializer.stdout \
+            2> /tmp/materializer.stderr
+          rc=$?
+          set -e
+
+          if (( rc != 0 )); then
+            mkdir -p .github/diagnostics
+            cp /tmp/materialize_lts_temporal_followup.py \
+              .github/diagnostics/materialize_lts_temporal_followup.py
+            {
+              printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+              printf 'commit=%s\n' "$GITHUB_SHA"
+              printf 'payload_sha256=%s\n' "$(sha256sum "$payload" | awk '{print $1}')"
+              printf 'return_code=%s\n\n=== stdout ===\n' "$rc"
+              cat /tmp/materializer.stdout
+              printf '\n=== stderr ===\n'
+              cat /tmp/materializer.stderr
+            } > .github/diagnostics/materializer_failure.txt
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/diagnostics
+            git commit -m "diagnose(lts): capture materializer failure"
+            git push origin HEAD:agent/lts-temporal-formation-metric-stack
+            exit "$rc"
+          fi
+
+          cat /tmp/materializer.stdout
+          test ! -s /tmp/materializer.stderr || cat /tmp/materializer.stderr >&2
 
       - name: Restore ordinary CI and evidence workflows
         shell: bash
@@ -50,6 +81,7 @@ jobs:
           source_commit=792b013534f8461d7578b95d7b42ef9b2fae05ff
           git show "$source_commit:.github/workflows/ci.yml" > .github/workflows/ci.yml
           git show "$source_commit:.github/workflows/multi-uav-lts-temporal-formation-evidence.yml" > .github/workflows/multi-uav-lts-temporal-formation-evidence.yml
+          rm -rf .github/diagnostics
           rm -f .github/patches/materialize_lts_temporal_followup.py.gz
           rm -f .github/workflows/materialize-lts-temporal-followup.yml
           git diff --check
