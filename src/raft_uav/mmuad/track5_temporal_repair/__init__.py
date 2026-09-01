@@ -75,6 +75,12 @@ def _validate_iterations(value: Any) -> int:
         raise ValueError(f"{message}: {value!r}")
     if isinstance(scalar, Integral):
         iterations = int(scalar)
+    elif isinstance(scalar, (float, np.floating)):
+        if not np.isfinite(scalar):
+            raise ValueError(f"{message}: {value!r}")
+        iterations = int(scalar)
+        if scalar != iterations:
+            raise ValueError(f"{message}: {value!r}")
     else:
         try:
             numeric = float(scalar)
