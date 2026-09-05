@@ -194,6 +194,9 @@ def write_track5_temporal_repair_outputs(
 ) -> dict[str, Path]:
     """Write outputs after normalizing persisted repair flags."""
 
+    if require_leaderboard_ready and template is None:
+        raise ValueError("require_leaderboard_ready=True requires a template")
+
     normalized_diagnostics = pd.DataFrame(diagnostics).copy()
     if "repaired" in normalized_diagnostics.columns:
         normalized_diagnostics["repaired"] = _boolean_series(
