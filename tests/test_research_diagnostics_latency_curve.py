@@ -64,3 +64,28 @@ def test_latency_curve_preserves_valid_zero_gate() -> None:
     assert result.loc[0, "covered_truth_rows"] == len(truth)
     assert result.loc[0, "truth_coverage_rate"] == 1.0
     assert result.loc[0, "error_3d_rmse_m"] == 0.0
+
+
+def test_latency_curve_keeps_finite_extreme_rmse_finite() -> None:
+    truth = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "east_m": [0.0],
+            "north_m": [0.0],
+            "up_m": [0.0],
+        }
+    )
+    estimates = pd.DataFrame(
+        {
+            "time_s": [0.0],
+            "east_m": [1.0e200],
+            "north_m": [0.0],
+            "up_m": [0.0],
+        }
+    )
+
+    with np.errstate(over="raise", invalid="raise"):
+        result = latency_curve({0.0: estimates}, truth, max_time_delta_s=0.0)
+
+    assert result.loc[0, "error_3d_rmse_m"] == pytest.approx(1.0e200)
+    assert result.loc[0, "error_3d_p95_m"] == pytest.approx(1.0e200)
