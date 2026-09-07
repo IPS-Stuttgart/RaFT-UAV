@@ -1,4 +1,4 @@
-"""Reject ambiguous Track 5 schemas and unsafe speed-limit inputs/outputs."""
+"""Reject ambiguous Track 5 schemas and unsafe speed-limit output metadata."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from typing import Any, Callable
 import pandas as pd
 
 _SCHEMA_PATCH_MARKER = "_raft_uav_rejects_ambiguous_track5_dual_schema"
-_SPEED_LIMIT_TIME_PATCH_MARKER = "_raft_uav_rejects_duplicate_track5_speed_limit_times"
 _SPEED_LIMIT_OUTPUT_PATCH_MARKER = "_raft_uav_validates_track5_speed_limit_outputs"
 _OFFICIAL_COLUMNS = frozenset(
     {
@@ -23,7 +22,10 @@ _OFFICIAL_COLUMNS = frozenset(
 def _contains_complete_official_schema(rows: object) -> bool:
     """Return whether all official Track 5 columns are physically present."""
 
-    columns = {str(column).strip().casefold() for column in pd.DataFrame(rows).columns}
+    columns = {
+        str(column).strip().casefold()
+        for column in pd.DataFrame(rows).columns
+    }
     return _OFFICIAL_COLUMNS <= columns
 
 
@@ -84,43 +86,6 @@ def _install_submission_schema_guard(ensemble: Any) -> None:
         implementation._has_normalized_submission_columns = _has_normalized_submission_columns
 
 
-def _install_speed_limit_timestamp_guard(speed_limit: Any) -> None:
-    """Reject duplicate timestamps that the projector cannot physically constrain."""
-
-    original: Callable[[pd.DataFrame], pd.DataFrame] = speed_limit._normalized_submission
-    if getattr(original, _SPEED_LIMIT_TIME_PATCH_MARKER, False):
-        return
-
-    @wraps(original)
-    def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
-        rows = original(submission)
-        duplicate_mask = rows.duplicated(
-            subset=["sequence_id", "time_s"],
-            keep=False,
-        )
-        if not bool(duplicate_mask.any()):
-            return rows
-
-        duplicate_pairs = rows.loc[
-            duplicate_mask,
-            ["sequence_id", "time_s"],
-        ].drop_duplicates()
-        preview_pairs = duplicate_pairs.head(5)
-        preview = ", ".join(
-            f"({sequence_id!r}, {time_s!r})"
-            for sequence_id, time_s in preview_pairs.itertuples(index=False, name=None)
-        )
-        suffix = ", ..." if len(duplicate_pairs) > len(preview_pairs) else ""
-        raise ValueError(
-            "submission contains duplicate timestamps within a sequence; "
-            "speed limiting requires one position per sequence and time: "
-            f"{preview}{suffix}"
-        )
-
-    setattr(_normalized_submission, _SPEED_LIMIT_TIME_PATCH_MARKER, True)
-    speed_limit._normalized_submission = _normalized_submission
-
-
 def _install_speed_limit_output_guard(speed_limit: Any) -> None:
     """Validate persisted flags and readiness requirements before any output write."""
 
@@ -146,13 +111,16 @@ def _install_speed_limit_output_guard(speed_limit: Any) -> None:
     setattr(write_track5_speed_limit_outputs, _SPEED_LIMIT_OUTPUT_PATCH_MARKER, True)
     speed_limit.write_track5_speed_limit_outputs = write_track5_speed_limit_outputs
 
+    implementation = getattr(speed_limit, "_IMPL", None)
+    if implementation is not None:
+        implementation.write_track5_speed_limit_outputs = write_track5_speed_limit_outputs
+
 
 def install() -> None:
-    """Install Track 5 schema and speed-limit safeguards idempotently."""
+    """Install Track 5 schema and speed-limit output safeguards idempotently."""
 
     from raft_uav.mmuad import track5_speed_limit as speed_limit
     from raft_uav.mmuad import track5_submission_ensemble as ensemble
 
     _install_submission_schema_guard(ensemble)
-    _install_speed_limit_timestamp_guard(speed_limit)
     _install_speed_limit_output_guard(speed_limit)
