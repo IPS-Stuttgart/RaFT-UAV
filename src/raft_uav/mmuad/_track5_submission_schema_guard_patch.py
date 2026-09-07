@@ -1,4 +1,4 @@
-"""Reject ambiguous Track 5 files instead of changing schemas after validation fails."""
+"""Reject ambiguous Track 5 schemas and unsafe speed-limit inputs/outputs."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ from typing import Any, Callable
 
 import pandas as pd
 
-_PATCH_MARKER = "_raft_uav_rejects_ambiguous_track5_dual_schema"
+_SCHEMA_PATCH_MARKER = "_raft_uav_rejects_ambiguous_track5_dual_schema"
+_SPEED_LIMIT_TIME_PATCH_MARKER = "_raft_uav_rejects_duplicate_track5_speed_limit_times"
+_SPEED_LIMIT_OUTPUT_PATCH_MARKER = "_raft_uav_validates_track5_speed_limit_outputs"
 _OFFICIAL_COLUMNS = frozenset(
     {
         "sequence",
@@ -21,20 +23,51 @@ _OFFICIAL_COLUMNS = frozenset(
 def _contains_complete_official_schema(rows: object) -> bool:
     """Return whether all official Track 5 columns are physically present."""
 
-    columns = {
-        str(column).strip().casefold()
-        for column in pd.DataFrame(rows).columns
-    }
+    columns = {str(column).strip().casefold() for column in pd.DataFrame(rows).columns}
     return _OFFICIAL_COLUMNS <= columns
 
 
-def install() -> None:
+def _speed_limit_applied_flags(values: pd.Series) -> pd.Series:
+    """Parse persisted correction flags without relying on string truthiness."""
+
+    text = values.astype("string").str.strip().str.casefold()
+    true = text.isin({"true", "t", "yes", "y", "on"})
+    false = text.isna() | text.isin(
+        {
+            "",
+            "false",
+            "f",
+            "no",
+            "n",
+            "off",
+            "none",
+            "null",
+            "nan",
+            "na",
+            "n/a",
+            "<na>",
+            "nat",
+        }
+    )
+    numeric = pd.to_numeric(text, errors="coerce")
+    true = true | numeric.eq(1.0).fillna(False)
+    false = false | numeric.eq(0.0).fillna(False)
+    invalid = ~(true | false)
+    if bool(invalid.any()):
+        bad = values.loc[invalid]
+        raise ValueError(
+            "speed_limit_applied contains invalid Boolean values at rows "
+            f"{bad.index[:5].tolist()}: {bad.iloc[:5].tolist()}; expected booleans, "
+            "exact numeric 0/1, recognized Boolean text, or missing values"
+        )
+    return true.astype(bool)
+
+
+def _install_submission_schema_guard(ensemble: Any) -> None:
     """Keep official-schema validation authoritative for mixed-schema files."""
 
-    from raft_uav.mmuad import track5_submission_ensemble as ensemble
-
     original: Callable[[Any], bool] = ensemble._has_normalized_submission_columns
-    if getattr(original, _PATCH_MARKER, False):
+    if getattr(original, _SCHEMA_PATCH_MARKER, False):
         return
 
     @wraps(original)
@@ -43,11 +76,83 @@ def install() -> None:
             return False
         return bool(original(rows))
 
-    setattr(_has_normalized_submission_columns, _PATCH_MARKER, True)
+    setattr(_has_normalized_submission_columns, _SCHEMA_PATCH_MARKER, True)
     ensemble._has_normalized_submission_columns = _has_normalized_submission_columns
 
     implementation = getattr(ensemble, "_IMPL", None)
     if implementation is not None:
-        implementation._has_normalized_submission_columns = (
-            _has_normalized_submission_columns
+        implementation._has_normalized_submission_columns = _has_normalized_submission_columns
+
+
+def _install_speed_limit_timestamp_guard(speed_limit: Any) -> None:
+    """Reject duplicate timestamps that the projector cannot physically constrain."""
+
+    original: Callable[[pd.DataFrame], pd.DataFrame] = speed_limit._normalized_submission
+    if getattr(original, _SPEED_LIMIT_TIME_PATCH_MARKER, False):
+        return
+
+    @wraps(original)
+    def _normalized_submission(submission: pd.DataFrame) -> pd.DataFrame:
+        rows = original(submission)
+        duplicate_mask = rows.duplicated(
+            subset=["sequence_id", "time_s"],
+            keep=False,
         )
+        if not bool(duplicate_mask.any()):
+            return rows
+
+        duplicate_pairs = rows.loc[
+            duplicate_mask,
+            ["sequence_id", "time_s"],
+        ].drop_duplicates()
+        preview_pairs = duplicate_pairs.head(5)
+        preview = ", ".join(
+            f"({sequence_id!r}, {time_s!r})"
+            for sequence_id, time_s in preview_pairs.itertuples(index=False, name=None)
+        )
+        suffix = ", ..." if len(duplicate_pairs) > len(preview_pairs) else ""
+        raise ValueError(
+            "submission contains duplicate timestamps within a sequence; "
+            "speed limiting requires one position per sequence and time: "
+            f"{preview}{suffix}"
+        )
+
+    setattr(_normalized_submission, _SPEED_LIMIT_TIME_PATCH_MARKER, True)
+    speed_limit._normalized_submission = _normalized_submission
+
+
+def _install_speed_limit_output_guard(speed_limit: Any) -> None:
+    """Validate persisted flags and readiness requirements before any output write."""
+
+    original = speed_limit.write_track5_speed_limit_outputs
+    if getattr(original, _SPEED_LIMIT_OUTPUT_PATCH_MARKER, False):
+        return
+
+    @wraps(original)
+    def write_track5_speed_limit_outputs(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("require_leaderboard_ready", False) and kwargs.get("template") is None:
+            raise ValueError("require_leaderboard_ready=True requires a template")
+
+        diagnostics = kwargs.get("diagnostics")
+        if diagnostics is not None:
+            normalized = pd.DataFrame(diagnostics).copy()
+            if "speed_limit_applied" in normalized.columns:
+                flags = _speed_limit_applied_flags(normalized["speed_limit_applied"])
+                normalized["speed_limit_applied"] = flags.to_numpy(dtype=bool)
+            kwargs["diagnostics"] = normalized
+
+        return original(*args, **kwargs)
+
+    setattr(write_track5_speed_limit_outputs, _SPEED_LIMIT_OUTPUT_PATCH_MARKER, True)
+    speed_limit.write_track5_speed_limit_outputs = write_track5_speed_limit_outputs
+
+
+def install() -> None:
+    """Install Track 5 schema and speed-limit safeguards idempotently."""
+
+    from raft_uav.mmuad import track5_speed_limit as speed_limit
+    from raft_uav.mmuad import track5_submission_ensemble as ensemble
+
+    _install_submission_schema_guard(ensemble)
+    _install_speed_limit_timestamp_guard(speed_limit)
+    _install_speed_limit_output_guard(speed_limit)
