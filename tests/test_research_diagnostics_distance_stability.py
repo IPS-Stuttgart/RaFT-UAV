@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from raft_uav.research import diagnostics as diagnostics_module
 from raft_uav.research.diagnostics import association_regret, candidate_set_recall
 
 
@@ -71,3 +72,22 @@ def test_association_regret_ranks_large_representable_distances_correctly() -> N
     assert regret.loc[0, "association_regret_m"] == pytest.approx(
         selected_error - best_error
     )
+
+
+def test_stable_norm_repair_preserves_keepdims_shape() -> None:
+    values = np.array(
+        [
+            [6.0e307, 8.0e307, 0.0],
+            [3.0, 4.0, 0.0],
+        ]
+    )
+
+    with np.errstate(over="raise", invalid="raise"):
+        result = diagnostics_module._LEGACY.np.linalg.norm(
+            values,
+            axis=1,
+            keepdims=True,
+        )
+
+    assert result.shape == (2, 1)
+    assert result[:, 0] == pytest.approx([1.0e308, 5.0])

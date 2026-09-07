@@ -14,6 +14,9 @@ from raft_uav.research._diagnostics_distance_stability_patch import (
 from raft_uav.research._diagnostics_domain_shift_stability_patch import (
     apply_diagnostics_domain_shift_stability_patch,
 )
+from raft_uav.research._diagnostics_latency_stability_patch import (
+    apply_diagnostics_latency_stability_patch,
+)
 from raft_uav.research._diagnostics_numeric_frame_patch import (
     apply_diagnostics_numeric_frame_patch,
 )
@@ -32,6 +35,7 @@ apply_diagnostics_numeric_time_patch(_diagnostics)
 apply_diagnostics_numeric_frame_patch(_diagnostics)
 apply_diagnostics_domain_shift_stability_patch(_diagnostics)
 apply_diagnostics_distance_stability_patch(_diagnostics)
+apply_diagnostics_latency_stability_patch(_diagnostics)
 apply_factor_graph_frame_group_patch(_factor_graph)
 apply_factor_graph_sequence_guard_patch(_factor_graph)
 
