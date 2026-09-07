@@ -119,6 +119,26 @@ def test_assignment_handles_overflowing_search_bound_under_strict_errstate() -> 
     assert assignment == {0: 0}
 
 
+def test_assignment_handles_equal_unrepresentable_total_error() -> None:
+    assignment = optimal_timestamp_assignment(
+        [0.0, 0.0],
+        [1.0e308, 1.0e308],
+        tolerance_s=1.0e308,
+    )
+
+    assert assignment == {0: 0, 1: 1}
+
+
+def test_assignment_preserves_lower_error_when_both_totals_are_unrepresentable() -> None:
+    assignment = optimal_timestamp_assignment(
+        [-1.0000000000000006e308, -1.0000000000000004e308],
+        [-5.000000000000003e307, 5.000000000000003e307],
+        tolerance_s=float(np.finfo(float).max),
+    )
+
+    assert assignment == {0: 1, 1: 0}
+
+
 def test_public_track5_matching_uses_global_one_to_one_assignment() -> None:
     evaluated = evaluate_mmaud_results(
         _overlapping_results(),
