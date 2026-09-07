@@ -8,6 +8,7 @@ tracking pipeline.
 
 from raft_uav.research import diagnostics as _diagnostics
 from raft_uav.research import factor_graph as _factor_graph
+from raft_uav.research import tracklet_models as _tracklet_models
 from raft_uav.research._diagnostics_distance_stability_patch import (
     apply_diagnostics_distance_stability_patch,
 )
@@ -29,6 +30,9 @@ from raft_uav.research._factor_graph_frame_group_patch import (
 from raft_uav.research._factor_graph_sequence_guard_patch import (
     apply_factor_graph_sequence_guard_patch,
 )
+from raft_uav.research._tracklet_nonnegative_mean_stability_patch import (
+    apply_tracklet_nonnegative_mean_stability_patch,
+)
 from raft_uav.research.uncertainty import ConformalRadius, fit_conformal_radius
 
 apply_diagnostics_numeric_time_patch(_diagnostics)
@@ -38,6 +42,7 @@ apply_diagnostics_distance_stability_patch(_diagnostics)
 apply_diagnostics_latency_stability_patch(_diagnostics)
 apply_factor_graph_frame_group_patch(_factor_graph)
 apply_factor_graph_sequence_guard_patch(_factor_graph)
+apply_tracklet_nonnegative_mean_stability_patch(_tracklet_models)
 
 association_regret = _diagnostics.association_regret
 association_regret_summary = _diagnostics.association_regret_summary
